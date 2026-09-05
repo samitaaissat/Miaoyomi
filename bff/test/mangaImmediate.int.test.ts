@@ -166,6 +166,8 @@ test('selected chapter becomes one safe CBZ and resolves to the scanner book id'
   const readerBook = await app.inject({ method: 'GET', url: `/api/books/${body.bookId}`, headers: token(ids.reader) });
   assert.equal(readerBook.statusCode, 200, readerBook.body);
   assert.equal(readerBook.json().id, body.bookId);
+  assert.equal(readerBook.json().metadata.title, 'second translation · fr',
+    'the reader exposed the collision-safe archive filename instead of the source chapter title');
   const readerPages = await app.inject({ method: 'GET', url: `/api/books/${body.bookId}/pages`, headers: token(ids.reader) });
   assert.equal(readerPages.statusCode, 200, readerPages.body);
   assert.equal(readerPages.json().length, 1, 'the image reader did not see the downloaded PNG');
@@ -178,6 +180,31 @@ test('selected chapter becomes one safe CBZ and resolves to the scanner book id'
   assert.equal(again.json().bookId, body.bookId, 'provenance-backed reuse minted a new reader book');
   assert.deepEqual(calls, ['duplicate-b'], 'reuse fetched the chapter again');
   assert.equal((await cbzFiles(DOWNLOADS)).length, 1, 'reuse wrote another CBZ');
+
+  await q(
+    `INSERT INTO book_overrides (book_id, title) VALUES ($1, 'My chapter label')
+     ON CONFLICT (book_id) DO UPDATE SET title = EXCLUDED.title, updated_at = now()`,
+    [body.bookId],
+  );
+  const reusedAfterEdit = await app.inject({
+    method: 'POST', url: '/api/sources/chapter/open', headers: token(ids.reader),
+    payload: { source: SOURCE, sourceId: SERIES, chapterId: 'duplicate-b' },
+  });
+  assert.equal(reusedAfterEdit.statusCode, 200, reusedAfterEdit.body);
+  const editedBook = await app.inject({ method: 'GET', url: `/api/books/${body.bookId}`, headers: token(ids.reader) });
+  assert.equal(editedBook.json().metadata.title, 'My chapter label', 'reuse replaced a manual chapter title');
+
+  await rm(files[0]);
+  const rebuilt = await app.inject({
+    method: 'POST', url: '/api/sources/chapter/open', headers: token(ids.reader),
+    payload: { source: SOURCE, sourceId: SERIES, chapterId: 'duplicate-b' },
+  });
+  assert.equal(rebuilt.statusCode, 200, rebuilt.body);
+  assert.equal(rebuilt.json().bookId, body.bookId, 'archive rebuild minted a new reader book');
+  assert.deepEqual(calls, ['duplicate-b', 'duplicate-b'], 'archive rebuild did not fetch exactly its source chapter');
+  const rebuiltBook = await app.inject({ method: 'GET', url: `/api/books/${body.bookId}`, headers: token(ids.reader) });
+  assert.equal(rebuiltBook.json().metadata.title, 'My chapter label', 'archive rebuild replaced a manual chapter title');
+  assert.equal((await cbzFiles(DOWNLOADS)).length, 1, 'archive rebuild wrote a duplicate CBZ');
 });
 
 test('membership, download permission, and unknown chapter fail before page download', { skip }, async () => {

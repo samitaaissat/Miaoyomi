@@ -42,6 +42,22 @@ function archiveName(chapter: SourceChapter, adapter: SourceAdapter, sourceSerie
   return `Chapter ${chapter.number} [${digest(`${adapter.id}\0${sourceSeriesId}\0${chapter.sourceId}`)}].cbz`;
 }
 
+function displayTitle(chapter: SourceChapter): string {
+  const title = chapter.title?.replace(/\s+/g, ' ').trim() || `Chapter ${chapter.number}`;
+  const language = chapter.lang?.replace(/\s+/g, ' ').trim();
+  return language ? `${title} · ${language}` : title;
+}
+
+async function seedDisplayTitle(bookId: string, chapter: SourceChapter): Promise<void> {
+  // The archive hash remains the collision-safe filesystem identity. Seed the source label through the
+  // catalog's existing override seam, and never replace a title (or number) the reader edited later.
+  await q(
+    `INSERT INTO book_overrides (book_id, title) VALUES ($1, $2)
+     ON CONFLICT (book_id) DO NOTHING`,
+    [bookId, displayTitle(chapter)],
+  );
+}
+
 interface MappingRow {
   book_id: string;
   file: string;
@@ -159,7 +175,10 @@ export async function openMangaChapter(input: OpenMangaChapterInput): Promise<Op
   try {
     await c.query('SELECT pg_advisory_lock(hashtext($1), hashtext($2))', [lockA, lockB]);
     const mapped = await mappedBook(adapter.id, series.sourceId, chapter.sourceId, viewCtx);
-    if (mapped) return { bookId: mapped.book_id, readerUrl: `/reader/?book=${mapped.book_id}`, reused: true };
+    if (mapped) {
+      await seedDisplayTitle(mapped.book_id, chapter);
+      return { bookId: mapped.book_id, readerUrl: `/reader/?book=${mapped.book_id}`, reused: true };
+    }
 
     const folder = await folderFor(adapter, series);
     const libraryId = await intendedLibrary(folder, viewCtx);
@@ -201,6 +220,7 @@ export async function openMangaChapter(input: OpenMangaChapterInput): Promise<Op
     if (chapter.publishedAt) {
       await q('UPDATE lib_books SET published_at = $2::timestamptz WHERE id = $1', [book.id, chapter.publishedAt]);
     }
+    await seedDisplayTitle(book.id, chapter);
     return { bookId: book.id, readerUrl: `/reader/?book=${book.id}`, reused: !!downloaded.skipped };
   } finally {
     await c.query('SELECT pg_advisory_unlock(hashtext($1), hashtext($2))', [lockA, lockB]).catch(() => {});
