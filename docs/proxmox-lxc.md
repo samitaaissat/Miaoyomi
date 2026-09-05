@@ -84,6 +84,8 @@ bash /root/Miaoyomi/scripts/proxmox/create-lxc.sh \
 
 The installer rejects an existing app container ID. If app setup fails after creation, it preserves that guest for diagnosis; it does not destroy the app guest or overwrite another installation. The official solver wizard retains its own installation and failure handling. Enter the app with `pct enter CTID` and inspect `/var/log/miaoyomi/install.log` if guest installation began. The app installer does not set a root login password or SSH access. Inspect both guests and the reported failed step before retrying; reuse a successfully created solver with `--flaresolverr-ctid ID`.
 
+If an older installer fails during template extraction with `tar: /var/lib/lxc/CTID/rootfs: Cannot open: Permission denied`, download the current script and retry the same settings. The host installer now gives Proxmox a `022` umask so its mapped extraction user can traverse newly created directories. When Proxmox has removed the failed guest's disks and configuration, the retry removes only its empty, root-owned, unmounted CT directory and optional empty `rootfs` directory. It confirms the ID is unused and refuses symlinks or any remaining files; inspect any refusal before retrying. Configuration files and solver receipts remain private.
+
 ## Git source and remote one-liner
 
 The one-command installer uses the public `samitaaissat/Miaoyomi` repository and tracks `main` by default. It builds the app, frontend and novel engine from their committed lockfiles inside Alpine. Docker image builds and release workflows do not gate this native path.

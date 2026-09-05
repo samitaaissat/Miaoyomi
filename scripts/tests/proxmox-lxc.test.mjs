@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, statSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -138,10 +138,11 @@ test('guest config safely preserves literal characters without executing them', 
   const dir = mkdtempSync(join(tmpdir(), 'miaoyomi-config-'));
   try {
     const config = join(dir, 'install.conf');
-    const result = shell('PUBLIC_ORIGIN=https://read.example.com; WEB_PORT=8080; SOURCE_REPO=""; SOURCE_REF="feature/example"; MANGA_LIBRARY_PATH="/mnt/manga"; write_guest_config "$CONFIG"; source "$CONFIG"; printf "%s\\n" "$SOURCE_REF"', { CONFIG: config });
+    const result = shell('umask 022; PUBLIC_ORIGIN=https://read.example.com; WEB_PORT=8080; SOURCE_REPO=""; SOURCE_REF="feature/example"; MANGA_LIBRARY_PATH="/mnt/manga"; write_guest_config "$CONFIG"; source "$CONFIG"; printf "%s\\n" "$SOURCE_REF"', { CONFIG: config });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout.trim(), 'feature/example');
     assert.match(readFileSync(config, 'utf8'), /MANGA_LIBRARY_PATH=/);
+    assert.equal(statSync(config).mode & 0o777, 0o600);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -157,6 +158,91 @@ test('pct create failure never starts, overwrites or destroys a container', () =
   assert.match(result.stdout, /CALLED create/);
   assert.doesNotMatch(result.stdout, /CALLED (start|destroy|set)/);
 });
+
+test('Proxmox creation and start use traversable permissions even with a private caller umask', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'miaoyomi-pct-umask-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const result = shell(`
+umask 077
+TEMPLATE=local:vztmpl/alpine.tar.xz
+pct() {
+  if [[ $1 == create ]]; then mkdir -p "$TEST_ROOT/600/rootfs"; fi
+  printf '%s:%s\\n' "$1" "$(umask)"
+}
+create_container
+printf 'caller:%s\\n' "$(umask)"
+`, { TEST_ROOT: dir });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /create:0*22/);
+  assert.match(result.stdout, /start:0*22/);
+  assert.match(result.stdout, /caller:0*77/);
+  assert.equal(statSync(join(dir, '600')).mode & 0o777, 0o755);
+});
+
+function leftoverFixture(t) {
+  const root = mkdtempSync(join(tmpdir(), 'miaoyomi-leftover-'));
+  const path = join(root, '600');
+  mkdirSync(join(path, 'rootfs'), { recursive: true, mode: 0o700 });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  return { root, path, run(extra = '') {
+    return shell(`
+LXC_ROOT_DIR="$TEST_ROOT"
+CTID=600
+pvesh() { return 0; }
+stat() { printf '0\\n'; }
+mountpoint() { return 1; }
+${extra}
+prepare_container_path
+`, { TEST_ROOT: root });
+  } };
+}
+
+test('retry removes only an unused, unmounted, empty CT directory left by failed extraction', t => {
+  const f = leftoverFixture(t);
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(f.path), false);
+});
+
+for (const kind of ['fresh-path', 'empty-parent']) {
+  test(`creation accepts an unused ${kind}`, t => {
+    const f = leftoverFixture(t);
+    rmSync(kind === 'fresh-path' ? f.path : join(f.path, 'rootfs'), { recursive: true });
+    const result = f.run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(f.path), false);
+  });
+}
+
+for (const kind of ['existing-id', 'parent-file', 'rootfs-file', 'parent-symlink', 'rootfs-symlink', 'mounted-parent', 'mounted-rootfs', 'wrong-owner']) {
+  test(`retry preserves a leftover path that is unsafe to remove: ${kind}`, t => {
+    const f = leftoverFixture(t);
+    let extra = '';
+    if (kind === 'existing-id') extra = 'pvesh() { return 1; }';
+    if (kind === 'parent-file') writeFileSync(join(f.path, '.keep'), 'preserve');
+    if (kind === 'rootfs-file') writeFileSync(join(f.path, 'rootfs/book.epub'), 'preserve');
+    if (kind === 'parent-symlink') {
+      rmSync(f.path, { recursive: true });
+      mkdirSync(join(f.root, 'target/rootfs'), { recursive: true });
+      symlinkSync(join(f.root, 'target'), f.path);
+    }
+    if (kind === 'rootfs-symlink') {
+      rmSync(join(f.path, 'rootfs'), { recursive: true });
+      mkdirSync(join(f.root, 'target'));
+      symlinkSync(join(f.root, 'target'), join(f.path, 'rootfs'));
+    }
+    if (kind === 'mounted-parent') extra = 'mountpoint() { [[ ${3:-} == "$LXC_ROOT_DIR/$CTID" ]]; }';
+    if (kind === 'mounted-rootfs') extra = 'mountpoint() { [[ ${3:-} == "$LXC_ROOT_DIR/$CTID/rootfs" ]]; }';
+    if (kind === 'wrong-owner') extra = 'stat() { printf "100000\\n"; }';
+    const result = f.run(extra);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /already in use|Refusing to clean/);
+    assert.equal(existsSync(f.path), true, kind);
+    assert.equal(existsSync(join(f.path, 'rootfs')), true, kind);
+    if (kind === 'parent-file') assert.equal(readFileSync(join(f.path, '.keep'), 'utf8'), 'preserve');
+    if (kind === 'rootfs-file') assert.equal(readFileSync(join(f.path, 'rootfs/book.epub'), 'utf8'), 'preserve');
+  });
+}
 
 test('successful creation uses a read-only bind mount and reports an actual DHCP address', () => {
   const result = shell('CTID=120; TEMPLATE=local:vztmpl/alpine.tar.xz; MANGA_MOUNT=/srv/books; pct() { if [[ "$1" == exec ]]; then printf "2: eth0 inet 10.0.0.25/24 brd 10.0.0.255 scope global eth0\\n"; else printf "CALLED %s\\n" "$*"; fi; }; create_container; guest_address');
@@ -217,6 +303,7 @@ download_community_script() {
 #!/usr/bin/env bash
 set -eu
 printf 'upstream:%s\\n' "$var_brg" >> "$TEST_ROOT/events"
+printf 'upstream-umask:%s\\n' "$(umask)" >> "$TEST_ROOT/events"
 case "$MODE" in
   cancel) exit 7;;
   missing) exit 0;;
@@ -229,6 +316,7 @@ COMMUNITY
 }
 `;
   return {
+    root,
     run(code) { return shell(stub + code, { TEST_ROOT: root, MODE: mode }); },
     events() { try { return readFileSync(join(root, 'events'), 'utf8'); } catch { return ''; } },
   };
@@ -242,6 +330,16 @@ test('official child wizard reports the actual new CT ID and address without alt
   assert.match(result.stdout, /^FLARESOLVERR_URL=http:\/\/10\.0\.0\.26:8191$/m);
   assert.match(f.events(), /upstream:vmbr42/);
   assert.doesNotMatch(f.events(), /^set |destroy|nesting=/m);
+});
+
+test('official wizard gets a traversable umask while its hook and receipt stay private', t => {
+  const f = solverFixture(t);
+  const result = f.run('umask 077; prepare_solver; printf "caller:%s\\n" "$(umask)"');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(f.events(), /upstream-umask:0*22/);
+  assert.match(result.stdout, /caller:0*77/);
+  assert.equal(statSync(join(f.root, 'record-solver.sh')).mode & 0o777, 0o700);
+  assert.equal(statSync(join(f.root, 'solver.ctid')).mode & 0o777, 0o600);
 });
 
 for (const mode of ['cancel', 'missing', 'existing', 'malformed']) {

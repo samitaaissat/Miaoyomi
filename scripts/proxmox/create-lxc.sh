@@ -40,6 +40,7 @@ CREATED=0
 FINISHED=0
 TEMPLATE=
 SOLVER_ATTEMPTED=0
+LXC_ROOT_DIR=/var/lib/lxc
 
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 log() { printf '\n==> %s\n' "$*"; }
@@ -239,7 +240,7 @@ require_host() {
   [[ $EUID == 0 ]] || die "Run this installer as root on the Proxmox node"
   [[ $(uname -m) == x86_64 ]] || die "This installer supports x86_64 Proxmox nodes"
   local command version
-  for command in pct pveam pvesm pvesh pveversion ip tar gzip flock curl; do
+  for command in pct pveam pvesm pvesh pveversion ip tar gzip flock curl mountpoint stat rmdir; do
     command -v "$command" >/dev/null || die "Missing $command; run on a Proxmox VE node"
   done
   version=$(pveversion)
@@ -251,6 +252,32 @@ acquire_host_lock() {
 }
 ensure_unused_id() {
   pvesh get /cluster/nextid --vmid "$CTID" >/dev/null 2>&1 || die "Container/VM ID $CTID is already in use or the cluster cannot confirm it is available"
+}
+prepare_container_path() {
+  ensure_unused_id
+  local path=$LXC_ROOT_DIR/$CTID entry directory
+  [[ ! -L $LXC_ROOT_DIR && ! -L $path ]] || die "Refusing to clean a symlink at $path or its parent"
+  [[ -e $path ]] || return 0
+  # A failed pct create can remove its volumes/config but leave these empty
+  # directories with the old umask. Never chmod or recursively delete a CT tree.
+  for directory in "$path" "$path/rootfs"; do
+    [[ ! -L $directory ]] || die "Refusing to clean symlink $directory"
+    [[ -e $directory ]] || continue
+    [[ -d $directory && $(stat -c %u -- "$directory") == 0 ]] || die "Refusing to clean $directory: expected a root-owned directory"
+    if mountpoint -q -- "$directory"; then die "Refusing to clean mounted directory $directory"; fi
+  done
+  for entry in "$path"/* "$path"/.[!.]* "$path"/..?*; do
+    [[ -e $entry || -L $entry ]] || continue
+    [[ $entry == "$path/rootfs" ]] || die "Refusing to clean $path: unexpected contents; inspect it before retrying"
+  done
+  for entry in "$path/rootfs"/* "$path/rootfs"/.[!.]* "$path/rootfs"/..?*; do
+    [[ -e $entry || -L $entry ]] || continue
+    die "Refusing to clean $path/rootfs: contains data; inspect it before retrying"
+  done
+  # rmdir also refuses nonempty/mounted directories if their state has changed.
+  if [[ -d $path/rootfs ]]; then rmdir -- "$path/rootfs"; fi
+  rmdir -- "$path"
+  log "Removed empty directories left by an earlier failed creation of CT $CTID"
 }
 check_storage() {
   local result
@@ -383,9 +410,10 @@ prepare_template() {
 }
 create_container() {
   create_args
-  pct "${CREATE_ARGS[@]}"
+  # Proxmox's mapped extraction user must traverse the host-side CT directory.
+  (umask 022; pct "${CREATE_ARGS[@]}")
   CREATED=1
-  pct start "$CTID"
+  (umask 022; pct start "$CTID")
 }
 guest_address() {
   pct exec "${1:-$CTID}" -- ip -4 -o addr show dev eth0 scope global | awk '{ split($4,a,"/"); print a[1]; exit }'
@@ -405,13 +433,14 @@ download_community_script() {
   bash -n "$1"
 }
 
-run_community_script() {
+run_community_script() (
   # Keep the official wizard on the terminal in its own Bash process. Do not
   # source it: its exit statements, variables and traps belong to that process.
   # Never pass the app's static IP; the solver requires a different address.
+  umask 022
   var_post_install="$WORK_DIR/record-solver.sh" var_brg="$BRIDGE" \
     bash "$WORK_DIR/flaresolverr.sh" 9>&-
-}
+)
 
 create_solver_container() {
   local before id receipt=$WORK_DIR/solver.ctid
@@ -566,12 +595,14 @@ main() {
   if [[ -n $FLARESOLVERR_CTID ]]; then check_solver_container "$FLARESOLVERR_CTID"; fi
   if [[ $ASSUME_YES == 0 ]]; then confirm; fi
   acquire_host_lock
-  umask 077
+  # Normal host tools need traversable directories. mktemp keeps this workspace
+  # private; write_guest_config and the solver receipt use their own umask 077.
+  umask 022
   WORK_DIR=$(mktemp -d /var/tmp/miaoyomi-install.XXXXXX)
   trap cleanup EXIT
   prepare_source
   prepare_template
-  ensure_unused_id
+  prepare_container_path
   log "Creating container $CTID"
   create_container
   prepare_solver
