@@ -9,4 +9,7 @@ web/out
 bff/dist
 .git
 .env
+data
+novel-engine
+.superpowers
 docker-compose.override.yml

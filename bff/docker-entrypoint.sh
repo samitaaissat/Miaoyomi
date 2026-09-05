@@ -59,7 +59,7 @@ if [ "$ROOT" = 1 ]; then
   # The recursion is conditional because /cache holds tens of thousands of files (61,336 / 11.3 GB on the
   # instance this was written against) and a blind `chown -R` would stat every one of them on every single
   # container start, to change nothing. /data is the embedded database's volume and is only ever created here.
-  for d in /config /library-dl /backups /cache /data; do
+  for d in /config /library-dl /novels /backups /cache /data; do
     [ -d "$d" ] || continue
     owner="$(stat -c '%u' "$d" 2>/dev/null || echo '')"
     if [ "$owner" != "$APP_UID" ]; then

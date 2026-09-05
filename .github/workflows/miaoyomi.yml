@@ -1,0 +1,107 @@
+name: Miaoyomi
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  novel-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: novel-engine/package-lock.json
+      - run: npm ci
+        working-directory: novel-engine
+      - run: npm test
+        working-directory: novel-engine
+  standard-epub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: bff
+      - name: Generate a standard archive and validate independently
+        working-directory: bff
+        run: |
+          node --import tsx test/helpers/generateNovelEpub.cjs
+          curl --fail --location https://github.com/w3c/epubcheck/releases/download/v5.3.0/epubcheck-5.3.0.zip -o /tmp/epubcheck.zip
+          unzip -q /tmp/epubcheck.zip -d /tmp
+          java -jar /tmp/epubcheck-5.3.0/epubcheck.jar /tmp/miaoyomi-epub-fixture/*.epub
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/miaoyomi-setup.sh --config-only
+      - run: python3 -m unittest discover -s scripts/tests -v
+      - run: docker compose -f compose.yaml up -d --build --wait --wait-timeout 240
+      - run: python3 test/compose-smoke.py
+      - run: docker compose -f compose.yaml exec -T app node < test/seed-standard-books.cjs
+      - name: Full backup
+        run: python3 scripts/miaoyomi-backup.py backup "$RUNNER_TEMP/miaoyomi-backup"
+      - name: Restore into a separate empty project and empty bind paths
+        run: |
+          docker compose -f compose.yaml stop
+          COMPOSE_PROJECT_NAME=miaoyomi-restore MANGA_LIBRARY_PATH="$RUNNER_TEMP/restored-manga" MANGA_DOWNLOAD_PATH="$RUNNER_TEMP/restored-downloads" NOVEL_LIBRARY_PATH="$RUNNER_TEMP/restored-novels" python3 scripts/miaoyomi-backup.py restore-empty "$RUNNER_TEMP/miaoyomi-backup"
+          COMPOSE_PROJECT_NAME=miaoyomi-restore MANGA_LIBRARY_PATH="$RUNNER_TEMP/restored-manga" MANGA_DOWNLOAD_PATH="$RUNNER_TEMP/restored-downloads" NOVEL_LIBRARY_PATH="$RUNNER_TEMP/restored-novels" docker compose -f compose.yaml up -d --wait --wait-timeout 240
+          curl --fail http://127.0.0.1:8080/healthz
+          test "$(curl --fail --silent http://127.0.0.1:8080/api/setup/status)" = '{"needsSetup":false}'
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          for original, restored in [('data/downloaded-manga', 'restored-downloads'), ('data/novels', 'restored-novels')]:
+              files = [file for file in Path(original).rglob('*') if file.is_file()]
+              assert files, original
+              for file in files:
+                  copy = Path(os.environ['RUNNER_TEMP']) / restored / file.relative_to(original)
+                  assert copy.read_bytes() == file.read_bytes(), str(copy)
+          print('Restored CBZ/EPUB bytes match original archives')
+          PY
+      - name: Diagnostics
+        if: failure()
+        run: docker compose -f compose.yaml logs --tail=100
+      - name: Stop disposable instances
+        if: always()
+        run: |
+          docker compose -f compose.yaml down --volumes
+          COMPOSE_PROJECT_NAME=miaoyomi-restore docker compose -f compose.yaml down --volumes
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: miaoyomi
+          POSTGRES_PASSWORD: miaoyomi-test
+          POSTGRES_DB: miaoyomi_browser_manga
+        ports:
+          - 55433:5432
+        options: >-
+          --health-cmd "pg_isready -U miaoyomi -d miaoyomi_browser_manga"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: web
+      - run: npm ci
+        working-directory: bff
+      - run: npm run build
+        working-directory: web
+      - run: node test/e2e/novels.mjs
+        working-directory: web
+      - run: node test/e2e/manga-immediate.mjs
+        working-directory: web
+        env:
+          MANGA_BROWSER_DATABASE_URL: postgres://miaoyomi:miaoyomi-test@127.0.0.1:55433/miaoyomi_browser_manga

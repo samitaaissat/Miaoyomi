@@ -1,0 +1,34 @@
+# The downstream app always builds from this checkout; the upstream image has no prose reader.
+FROM --platform=$BUILDPLATFORM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS web
+WORKDIR /build
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY web/ ./
+RUN npm run build
+
+FROM --platform=$BUILDPLATFORM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS api
+WORKDIR /build
+COPY bff/package.json bff/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY bff/ ./
+RUN npm run build
+
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+WORKDIR /app
+ENV NODE_ENV=production WEB_ROOT=/app/web PORT=3000
+RUN apk add --no-cache tini su-exec postgresql16-client tar gzip \
+ && addgroup -g 10002 -S yomi && adduser -u 10002 -S -G yomi yomi \
+ && mkdir -p /config /cache /backups /library /library-dl /novels /sources \
+ && chown -R yomi:yomi /config /cache /backups /library-dl /novels /app
+COPY bff/package.json bff/package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
+COPY --from=api /build/dist ./dist
+COPY --from=web /build/out ./web
+COPY bff/openapi.yaml ./openapi.yaml
+COPY bff/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+ CMD wget -qO- http://127.0.0.1:3000/healthz >/dev/null || exit 1
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
+CMD ["node", "dist/server.js"]
