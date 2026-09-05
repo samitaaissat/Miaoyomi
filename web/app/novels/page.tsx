@@ -51,36 +51,39 @@ function DiscoverView() {
   const { user } = useAuth();
   const { data, isLoading, error, refetch } = useQuery({ queryKey: ['novel-sources', user?.id], queryFn: novelsApi.sources, retry: false });
   const sources = data?.sources ?? [];
-  const languages = useMemo(() => [...new Set(sources.map((source) => source.lang))].sort(), [sources]);
+  const enabledSources = sources.filter((source) => source.enabled && source.supported);
+  const languages = [...new Set(enabledSources.map((source) => source.lang))].sort();
   const [language, setLanguage] = useState('all');
-  const available = sources.filter((source) => source.enabled && source.supported && (language === 'all' || source.lang === language));
-  const [sourceId, setSourceId] = useState('');
-  const selected = available.find((source) => source.id === sourceId) || available[0];
+  const available = enabledSources.filter((source) => language === 'all' || source.lang === language);
+  const [sourceIds, setSourceIds] = useState<string[]>([]);
+  const scopedSources = sourceIds.length ? available.filter((source) => sourceIds.includes(source.id)) : available;
+  const selected = sourceIds.length === 1 ? scopedSources[0] : undefined;
   const [mode, setMode] = useState<'popular' | 'latest'>('popular');
+  const supportsLatest = scopedSources.some((source) => source.supportsLatest);
+  const browseMode = supportsLatest ? mode : 'popular';
   const [searchText, setSearchText] = useState('');
   const [query, setQuery] = useState('');
   const definitions = useMemo(() => normalizeFilters(selected?.filters), [selected?.filters]);
-  const [filterValues, setFilterValues] = useState<Record<string, unknown>>({});
-  useEffect(() => {
-    if (!selected) return;
-    setSourceId(selected.id);
-    setFilterValues(Object.fromEntries(normalizeFilters(selected.filters).map((filter) => [filter.key, structuredClone(filter.value)])));
-    if (!selected.supportsLatest) setMode('popular');
-    setQuery('');
-    setSearchText('');
-  }, [selected?.id]);
+  const [sourceFilterValues, setSourceFilterValues] = useState<Record<string, Record<string, unknown>>>({});
+  const filterValues = selected ? sourceFilterValues[selected.id] ?? {} : {};
+  const setFilterValues = (values: Record<string, unknown>) => {
+    if (selected) setSourceFilterValues((current) => ({ ...current, [selected.id]: values }));
+  };
   const serialized = useMemo(() => serializeFilters(definitions, filterValues), [definitions, filterValues]);
+  const scope = { sourceIds, lang: language };
   const listing = useInfiniteQuery({
-    queryKey: ['novel-listing', user?.id, selected?.id, query, mode, JSON.stringify(serialized)],
-    initialPageParam: 1,
+    queryKey: ['novel-listing', user?.id, scope, scopedSources.map((source) => source.id), query, browseMode, query ? null : serialized],
+    initialPageParam: { page: 1, cursor: undefined as string | undefined },
     queryFn: ({ pageParam }) => query
-      ? novelsApi.search(selected!.id, query, pageParam)
-      : novelsApi.browse(selected!.id, mode, pageParam, serialized),
-    getNextPageParam: (last) => last.hasMore ? last.page + 1 : undefined,
-    enabled: !!selected,
+      ? novelsApi.search(scope, query, pageParam.page, pageParam.cursor)
+      : novelsApi.browse(scope, browseMode, pageParam.page, serialized, pageParam.cursor),
+    getNextPageParam: (last) => last.hasMore ? { page: last.page + 1, cursor: last.nextCursor } : undefined,
+    enabled: scopedSources.length > 0,
     retry: false,
   });
-  const items = listing.data?.pages.flatMap((page) => page.items) ?? [];
+  const items = [...new Map((listing.data?.pages.flatMap((page) => page.items) ?? []).map((novel) => [JSON.stringify([novel.sourceId, novel.path]), novel])).values()];
+  const failures = listing.data?.pages.at(-1)?.errors ?? [];
+  const sourceNames = new Map(sources.map((source) => [source.id, source.name]));
 
   if (isLoading) return <div className="grid grid-cols-2 gap-4 pt-7 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-7">{Array.from({ length: 7 }).map((_, index) => <div key={index} className="skeleton aspect-[2/3] rounded-2xl" />)}</div>;
   if (error) return <div className="pt-8"><Empty title="Novel sources are unavailable" text={novelErrorMessage(error)} /><button onClick={() => refetch()} className="btn-ghost mx-auto mt-4 flex"><IcRefresh width={17} />Retry</button></div>;
@@ -89,43 +92,45 @@ function DiscoverView() {
     <div className="px-4 pb-10 lg:px-0">
       <div className="hide-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 py-5 lg:mx-0 lg:px-0">
         <button onClick={() => setLanguage('all')} className={`chip ${language === 'all' ? 'chip-active' : ''}`}>All languages</button>
-        {languages.map((lang) => <button key={lang} onClick={() => { setLanguage(lang); setSourceId(''); }} className={`chip uppercase ${language === lang ? 'chip-active' : ''}`}>{lang}</button>)}
+        {languages.map((lang) => <button key={lang} onClick={() => setLanguage(lang)} className={`chip uppercase ${language === lang ? 'chip-active' : ''}`}>{lang}</button>)}
       </div>
-      {available.length ? (
+      {enabledSources.length ? (
         <>
-          <div className="grid gap-3 lg:grid-cols-[minmax(14rem,18rem)_1fr]">
-            <select aria-label="Novel source" className="field max-w-none" value={selected?.id || ''} onChange={(event) => setSourceId(event.target.value)}>
-              {available.map((source) => <option key={source.id} value={source.id}>{source.name} · {source.lang.toUpperCase()}</option>)}
-            </select>
-            <form onSubmit={(event) => { event.preventDefault(); setQuery(searchText.trim()); }} className="flex gap-2">
-              <label className="relative min-w-0 flex-1">
-                <IcSearch width={18} className="absolute left-3 top-3 text-fog-500" />
-                <input className="field max-w-none pl-10" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={`Search ${selected?.name || 'novels'}`} />
-              </label>
-              <button className="btn-accent px-4" type="submit">Search</button>
-              {query && <button className="btn-ghost px-4" type="button" onClick={() => { setQuery(''); setSearchText(''); }}>Clear</button>}
-            </form>
-          </div>
+          <form onSubmit={(event) => { event.preventDefault(); setQuery(searchText.trim()); }} className="flex flex-wrap gap-2">
+            <label className="relative min-w-0 flex-1">
+              <IcSearch width={18} className="absolute left-3 top-3 text-fog-500" />
+              <input aria-label="Search novels" className="field max-w-none pl-10" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={selected ? `Search ${selected.name}` : 'Search novels'} />
+            </label>
+            <button className="btn-accent px-4" type="submit">Search</button>
+            {query && <button className="btn-ghost px-4" type="button" onClick={() => { setQuery(''); setSearchText(''); }}>Clear</button>}
+          </form>
           {!query && (
             <div className="my-5 flex gap-2">
-              <button className={`chip ${mode === 'popular' ? 'chip-active' : ''}`} onClick={() => setMode('popular')}>Popular</button>
-              {selected?.supportsLatest && <button className={`chip ${mode === 'latest' ? 'chip-active' : ''}`} onClick={() => setMode('latest')}>Latest</button>}
+              <button className={`chip ${browseMode === 'popular' ? 'chip-active' : ''}`} onClick={() => setMode('popular')}>Popular</button>
+              {supportsLatest && <button className={`chip ${browseMode === 'latest' ? 'chip-active' : ''}`} onClick={() => setMode('latest')}>Latest</button>}
             </div>
           )}
-          {!query && <NovelFilters definitions={definitions} values={filterValues} onChange={setFilterValues} />}
+          <NovelFilters definitions={definitions} values={filterValues} onChange={setFilterValues} sources={enabledSources} sourceIds={sourceIds} onSourcesChange={setSourceIds} searching={!!query} />
+          {failures.length > 0 && <div role="status" className="card mb-5 border-amber-400/20 p-4 text-sm text-amber-200">
+            <p className="font-semibold">{items.length ? 'Some sources could not answer' : 'Sources could not answer'}</p>
+            <ul className="mt-2 space-y-1 text-xs text-fog-400">{failures.map((failure) => <li key={failure.sourceId}>{failure.sourceName || sourceNames.get(failure.sourceId) || failure.sourceId}: {failure.message}</li>)}</ul>
+            <button type="button" className="mt-3 text-xs font-semibold text-accent" disabled={listing.isFetching} onClick={() => listing.refetch()}>{listing.isFetching ? 'Retrying…' : 'Retry sources'}</button>
+          </div>}
           {listing.isLoading ? (
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-7">{Array.from({ length: 7 }).map((_, index) => <div key={index} className="skeleton aspect-[2/3] rounded-2xl" />)}</div>
-          ) : listing.error ? (
-            <Empty title={`${selected?.name || 'This source'} could not answer`} text={novelErrorMessage(listing.error)} />
+          ) : listing.error && !items.length ? (
+            <><Empty title="Novel discovery could not refresh" text={novelErrorMessage(listing.error)} /><button type="button" className="btn-ghost mx-auto mt-4 flex" disabled={listing.isFetching} onClick={() => listing.refetch()}><IcRefresh width={17} />Retry</button></>
           ) : items.length ? (
             <>
-              <p className="mb-3 text-xs uppercase tracking-[.18em] text-fog-500">{query ? `Results for “${query}”` : mode}</p>
+              <p className="mb-3 text-xs uppercase tracking-[.18em] text-fog-500">{query ? `Results for “${query}”` : browseMode}</p>
               <div className="grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-7">
-                {items.map((novel, index) => <NovelCard key={`${novel.sourceId}:${novel.path}:${index}`} novel={novel} />)}
+                {items.map((novel) => <NovelCard key={JSON.stringify([novel.sourceId, novel.path])} novel={novel} sourceName={sourceNames.get(novel.sourceId) || novel.sourceId} fromSource />)}
               </div>
-              {listing.hasNextPage && <button className="btn-ghost mx-auto mt-8 flex" disabled={listing.isFetchingNextPage} onClick={() => listing.fetchNextPage()}>{listing.isFetchingNextPage ? 'Loading…' : 'Load more'}</button>}
             </>
-          ) : <Empty title="No novels found" text="This source answered successfully, but this page has no matching titles." />}
+          ) : failures.length ? <Empty title="No titles available yet" text="Retry the sources above or adjust your filters to browse other sources." />
+            : <Empty title="No novels found" text="No titles match these filters. Try another search or include more sources." />}
+          {listing.error && items.length > 0 && <p role="alert" className="mt-5 text-center text-sm text-amber-200">{novelErrorMessage(listing.error)}</p>}
+          {listing.hasNextPage && <button className="btn-ghost mx-auto mt-8 flex" disabled={listing.isFetching} onClick={() => listing.fetchNextPage()}>{listing.isFetchingNextPage ? 'Loading…' : listing.isFetchNextPageError ? 'Retry loading more' : 'Load more'}</button>}
         </>
       ) : (
         <Empty title="No enabled novel source" text="An administrator can enable a compatible source below. Sources that need unsupported browser or server features remain visible with their reason." />

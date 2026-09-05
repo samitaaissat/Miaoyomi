@@ -41,3 +41,11 @@ test('common form, headers and base64 APIs keep bodies and responses inside gues
   assert.match(request.body, /name="title"\r\n\r\nA & B/);
   assert.match(request.headers['content-type'], /^multipart\/form-data; boundary=/);
 });
+test('fetchWebView requests a guarded browser fetch and returns response text', async () => {
+  let request;
+  const result = await runPlugin(`exports.default={async parseNovel(){return await require('@libs/fetch').fetchWebView('https://fixture.example/', {headers:{'X-Requested-With':'XMLHttpRequest'}})}}`, 'parseNovel', [], { fetch: async (url, init) => { request = { url, init }; return { url, status: 200, headers: {}, body: '<p>browser result</p>' }; } });
+  assert.equal(result, '<p>browser result</p>');
+  assert.equal(request.url, 'https://fixture.example/');
+  assert.equal(request.init.useWebView, true);
+  assert.equal(request.init.headers['x-requested-with'], 'XMLHttpRequest');
+});

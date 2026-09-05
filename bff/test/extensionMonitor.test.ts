@@ -39,6 +39,8 @@ interface FakeExt {
 function engine(exts: FakeExt[], opts: {
   repos?: string[];
   refreshThrows?: Error;
+  addThrows?: Error;
+  canonicalRepo?: (url: string) => string;
   onUpdate?: (pkg: string) => boolean | Error;
   onInstall?: (pkg: string) => boolean;
 } = {}) {
@@ -90,14 +92,23 @@ function engine(exts: FakeExt[], opts: {
       if (r) e.installedVersion = e.upstreamVersion;
       return { updateExtension: { extension: r ? { pkgName: pkg, isInstalled: true } : null } };
     }
-    if (/setSettings/.test(query)) {
-      ops.push('setRepos'); calls.push({ op: 'setRepos', vars: variables });
-      repos = [...(variables.r as string[])];
-      return { setSettings: { settings: { extensionRepos: repos } } };
+    if (/addExtensionStore/.test(query)) {
+      const url = variables.url as string;
+      ops.push('addRepo'); calls.push({ op: 'addRepo', vars: variables });
+      if (opts.addThrows) throw opts.addThrows;
+      const canonical = opts.canonicalRepo?.(url) ?? url;
+      if (!repos.includes(canonical)) repos.push(canonical);
+      return { addExtensionStore: { extensionStore: { indexUrl: canonical } } };
     }
-    if (/extensionRepos/.test(query)) {
+    if (/removeExtensionStore/.test(query)) {
+      const url = variables.url as string;
+      ops.push('removeRepo'); calls.push({ op: 'removeRepo', vars: variables });
+      repos = repos.filter((repo) => repo !== url);
+      return { removeExtensionStore: { extensionStore: { indexUrl: url } } };
+    }
+    if (/extensionStores\s*\{/.test(query)) {
       ops.push('getRepos');
-      return { settings: { extensionRepos: repos } };
+      return { extensionStores: { nodes: repos.map((indexUrl) => ({ indexUrl })) } };
     }
     ops.push('list'); calls.push({ op: 'list', vars: variables });
     return { extensions: { nodes: state.map(node) } };
@@ -373,22 +384,52 @@ test('repository urls are adopted from the engine, and put back when it loses th
   const { runExtensionCheck } = await load();
 
   // First run after upgrade: we hold none, the engine holds one. Adopt it, do not write to the engine.
-  // Reintroduce by writing repos to the engine unconditionally: setRepos appears in ops.
+  // Reintroduce by writing repos to the engine unconditionally: addRepo appears in ops.
   const adopt = engine([upToDate('org.x.a', 'Alpha')], { repos: ['https://r/i.json'] });
   const stA = store({ repos: [] });
   await runExtensionCheck({}, deps(adopt, stA).deps as any);
   assert.deepEqual(stA.s.repos, ['https://r/i.json'], 'the engine\'s repositories were not adopted');
-  assert.ok(!adopt.ops.includes('setRepos'), 'adopting should not write back to the engine');
+  assert.ok(!adopt.ops.includes('addRepo'), 'adopting should not write back to the engine');
 
   // Its volume was wiped: the engine has none, we still know them. Put them back.
   // Reintroduce by removing the restore branch: the feature stays silently unconfigured.
-  const healed = engine([upToDate('org.x.a', 'Alpha')], { repos: [] });
-  const stB = store({ repos: ['https://r/i.json'] });
+  const saved = 'https://r/repo.json';
+  const canonical = 'https://r/index.pb';
+  const healed = engine([upToDate('org.x.a', 'Alpha')], {
+    repos: [], canonicalRepo: (url) => url === saved ? canonical : url,
+  });
+  const stB = store({ repos: [saved] });
   const dB = deps(healed, stB);
   const r = await runExtensionCheck({}, dB.deps as any);
-  assert.deepEqual(r.reposRestored, ['https://r/i.json']);
-  assert.deepEqual(healed.repos, ['https://r/i.json'], 'the engine did not get its repositories back');
+  assert.deepEqual(r.reposRestored, [canonical]);
+  assert.deepEqual(healed.repos, [canonical], 'the engine did not keep the canonical repository URL');
+  assert.deepEqual(stB.s.repos, [canonical], 'the saved recovery URL was not updated to the canonical URL');
   assert.ok(dB.audits.some((a) => a.event === 'extension.repo_restored'));
+
+  const again = await runExtensionCheck({}, dB.deps as any);
+  assert.deepEqual(again.reposRestored, [], 'the canonical repository was restored again on the next check');
+  assert.equal(healed.ops.filter((op) => op === 'addRepo').length, 1, 'the same store was added twice');
+});
+
+test('a rejected repository restore is a failed check and remains saved for retry', async () => {
+  const { runExtensionCheck } = await load();
+  const saved = 'https://r/index.pb';
+  const e = engine([upToDate('org.x.a', 'Alpha')], {
+    repos: [], addThrows: new Error('store rejected'),
+  });
+  const st = store({ repos: [saved] });
+  const d = deps(e, st);
+
+  const r = await runExtensionCheck({}, d.deps as any);
+
+  assert.equal(r.refreshed, false, 'a failed restore was presented as a successful refresh');
+  assert.match(r.refreshError!, /store rejected/);
+  assert.deepEqual(r.reposRestored, [], 'the rejected repository was reported as restored');
+  assert.deepEqual(st.s.repos, [saved], 'the recovery URL was discarded instead of retained for retry');
+  assert.ok(!e.ops.includes('refresh'), 'the catalogue was refreshed after its repository restore failed');
+  assert.ok(!d.audits.some((a) => a.event === 'extension.repo_restored'), 'the failed restore was audited as successful');
+  assert.ok(d.audits.some((a) => a.event === 'extension.check' && a.detail?.refreshed === false));
+  assert.ok(d.pushes.some((p) => /could not be read/.test(p.title)), 'the existing failure notification path was skipped');
 });
 
 test('a wiped engine gets its extensions back; an admin uninstalling one does not', async () => {

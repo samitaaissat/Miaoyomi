@@ -263,12 +263,12 @@ export async function runExtensionCheck(
     reloaded: false,
   };
 
-  // --- repositories -----------------------------------------------------------------------------------
-  // The engine's copy is authoritative while it exists; ours is the one that survives the volume being
-  // deleted. First run after upgrade adopts whatever the engine has, so nobody has to re-enter anything.
   let wiped = false;
-  const live = await getRepos(deps.gql).catch(() => null);
-  if (live) {
+  try {
+    // --- repositories ---------------------------------------------------------------------------------
+    // The engine's copy is authoritative while it exists; ours is the one that survives the volume being
+    // deleted. First run after upgrade adopts whatever the engine has, so nobody has to re-enter anything.
+    const live = await getRepos(deps.gql);
     if (!settings.repos.length && live.length) {
       await deps.store.saveRepos(live);
       settings.repos = live;
@@ -276,15 +276,17 @@ export async function runExtensionCheck(
       wiped = live.length === 0;
       const missing = settings.repos.filter((u) => !live.includes(u));
       if (missing.length) {
-        await setRepos([...live, ...missing], deps.gql).catch(() => {});
-        result.reposRestored = missing;
-        await deps.logAudit('extension.repo_restored', { detail: { urls: missing } });
+        const resolved = await setRepos([...live, ...missing], deps.gql);
+        result.reposRestored = resolved.filter((url) => !live.includes(url));
+        await deps.store.saveRepos(resolved);
+        settings.repos = resolved;
+        if (result.reposRestored.length) {
+          await deps.logAudit('extension.repo_restored', { detail: { urls: result.reposRestored } });
+        }
       }
     }
-  }
 
-  // --- refresh ----------------------------------------------------------------------------------------
-  try {
+    // --- refresh --------------------------------------------------------------------------------------
     result.known = await refreshExtensions(deps.gql, REFRESH_TIMEOUT_MS);
     result.refreshed = true;
   } catch (e) {

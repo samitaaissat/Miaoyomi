@@ -74,6 +74,7 @@ services:
       NOVEL_ENGINE_TOKEN: ${NOVEL_ENGINE_TOKEN:?Run scripts/miaoyomi-setup.sh first}
       NOVEL_ENGINE_STATE_DIR: /state
       NOVEL_ENGINE_ALLOWED_ORIGINS: ${NOVEL_ENGINE_ALLOWED_ORIGINS:-}
+      FLARESOLVERR_URL: ${FLARESOLVERR_URL:-}
     volumes:
       - novel_engine:/state
     tmpfs:
@@ -106,7 +107,7 @@ services:
     mem_limit: 2g
     environment:
       LOG_LEVEL: warning
-    networks: [manga]
+    networks: [manga, novel]
 
 networks:
   app:

@@ -2,7 +2,7 @@
 
 A self-hosted manga and webnovel PWA, built as a small downstream of [Uchiyomi](https://github.com/AngeloSha/uchiyomi). Browse a source, choose a title and chapter, and read. Server downloads use **CBZ for manga and EPUB for novels**. Device-offline reading is a separate, explicit download.
 
-The deployment targets your **x86_64 Proxmox node**, behind your existing reverse proxy. One command creates an unprivileged **Alpine 3.24 LXC** and installs Node 24, PostgreSQL 18, Suwayomi and Miaoyomi as native OpenRC services. By default, it also runs the [official community FlareSolverr installer](https://community-scripts.org/scripts/flaresolverr) to create a **separate Debian LXC** and connects both manga components to it. No Docker or other container runtime runs inside either LXC. It retains Fastify and Uchiyomi accounts. A private LNReader/QuickJS runtime supplies prose sources; Suwayomi supplies manga extensions.
+The deployment targets your **x86_64 Proxmox node**, behind your existing reverse proxy. One command creates an unprivileged **Alpine 3.24 LXC** and installs Node 24, PostgreSQL 18, Suwayomi and Miaoyomi as native OpenRC services. By default, it also runs the [official community FlareSolverr installer](https://community-scripts.org/scripts/flaresolverr) to create a **separate Debian LXC** and connects the manga components and novel engine to it. No Docker or other container runtime runs inside either LXC. It retains Fastify and Uchiyomi accounts. A private LNReader/QuickJS runtime supplies prose sources; Suwayomi supplies manga extensions.
 
 Run this single command as root in the **Proxmox node shell**:
 

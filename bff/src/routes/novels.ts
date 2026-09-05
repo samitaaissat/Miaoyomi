@@ -7,6 +7,7 @@ import { env } from '../env';
 import { viewCtxFor, sourceAllowedFor } from '../lib/visibility';
 import { createNovelEngine, resolveSourceUrl } from '../lib/novels/engine';
 import { NovelService } from '../lib/novels/service';
+import { discoverNovels, discoveryQuery, discoveryCursor, selectedSourceIds, type DiscoveryQuery } from '../lib/novels/discovery';
 import * as catalog from '../lib/novels/catalog';
 import { NovelError, type NovelEngine, type EngineSource } from '../lib/novels/apiTypes';
 
@@ -14,7 +15,6 @@ const key=z.string().regex(/^[a-f0-9]{64}$/);
 const idParams=z.object({id:key});
 const chapterParams=idParams.extend({chapterId:key});
 const sourceId=z.string().min(1).max(200);
-const page=z.coerce.number().int().min(1).max(10000).default(1);
 const inputProgress=z.object({chapterId:key,position:z.number().finite().min(0).max(1),completed:z.boolean(),updatedAt:z.number().finite().int().nonnegative(),mutationId:z.string().min(1).max(200)});
 
 export default async function novelRoutes(app:FastifyInstance,opts:{engine?:NovelEngine;archiveRoot?:string}={}) {
@@ -42,6 +42,21 @@ export default async function novelRoutes(app:FastifyInstance,opts:{engine?:Nove
     return source;
   }
 
+  async function discoverySources(req:FastifyRequest,v:DiscoveryQuery,mode?:string):Promise<EngineSource[]> {
+    await mayFetch(req);
+    const ctx=await viewCtxFor(userIdOf(req),roleOf(req));
+    const all=await engine.sources(),ids=selectedSourceIds(v);
+    for(const id of ids){
+      const source=all.find(s=>s.id===id);
+      if(!source)throw new NovelError(404,'unknown_source','Unknown novel source.');
+      if(!sourceAllowedFor(source,ctx.maxAgeRating))throw new NovelError(403,'forbidden','This source is not available to this account.');
+      if(!source.enabled||!source.supported)throw new NovelError(409,'source_unavailable',source.reason||'Enable a supported source to browse it.');
+    }
+    return all.filter(s=>s.enabled&&s.supported&&sourceAllowedFor(s,ctx.maxAgeRating)
+      &&(!ids.length||ids.includes(s.id))&&(!v.lang||v.lang==='all'||s.lang.toLowerCase()===v.lang.toLowerCase())
+      &&(mode!=='latest'||s.supportsLatest));
+  }
+
   app.get('/api/novels/sources',async req=>{
     await mayFetch(req);
     const ctx=await viewCtxFor(userIdOf(req),roleOf(req));
@@ -49,7 +64,8 @@ export default async function novelRoutes(app:FastifyInstance,opts:{engine?:Nove
     // Enabled state survives engine restarts; runtime filter metadata is initialized lazily.
     // Resolve sequentially so a large enabled list cannot exceed the private engine's worker limit.
     for(let i=0;i<sources.length;i++)if(sources[i].enabled&&sources[i].supported&&!sources[i].filters) {
-      sources[i]=await engine.source(sources[i].id);
+      try{sources[i]=await engine.source(sources[i].id);}
+      catch(error){req.log.warn({err:error,sourceId:sources[i].id},'Novel source metadata could not initialize');}
     }
     return {sources};
   });
@@ -59,25 +75,18 @@ export default async function novelRoutes(app:FastifyInstance,opts:{engine?:Nove
     return {source:await engine.enable(id,enabled)};
   });
   app.get('/api/novels/browse',async req=>{
-    const v=z.object({sourceId,mode:z.enum(['popular','latest']).default('popular'),page,filters:z.string().max(20000).optional()}).parse(req.query);
-    const source=await sourceFor(req,v.sourceId);
-    if(v.mode==='latest'&&!source.supportsLatest)throw new NovelError(400,'unsupported_mode','This source does not provide a latest catalog.');
-    let filters:Record<string,unknown>={};
+    const v=discoveryQuery.extend({mode:z.enum(['popular','latest']).default('popular'),filters:z.string().max(20000).optional()}).parse(req.query);
+    const pages=discoveryCursor(v.cursor);
+    let filters:Record<string,unknown>|undefined;
     if(v.filters){try{filters=z.record(z.unknown()).parse(JSON.parse(v.filters));}catch{throw new NovelError(400,'bad_filters','The source filters are invalid.');}}
-    else if(source.filters){
-      // LNReader passes typed values, not just primitives. Preserve explicit include/exclude defaults.
-      for(const [name,value] of Object.entries(source.filters)){
-        const f=value as any; if(f&&typeof f.type==='string')filters[name]={type:f.type,value:f.value};
-      }
-    }
-    const items=catalog.normalizeCards(source,await engine.invoke(source.id,'popularNovels',[v.page,{showLatestNovels:v.mode==='latest',filters}]));
-    return {items,page:v.page,hasMore:items.length>0};
+    if(filters&&Object.keys(filters).length&&selectedSourceIds(v).length!==1)throw new NovelError(400,'bad_filters','Select one source to use its catalog filters.');
+    const sources=await discoverySources(req,v,v.mode);
+    return discoverNovels(engine,sources,{page:v.page,pages,mode:v.mode,filters:filters&&Object.keys(filters).length?filters:undefined});
   });
   app.get('/api/novels/search',async req=>{
-    const v=z.object({sourceId,q:z.string().trim().min(1).max(500),page}).parse(req.query);
-    const source=await sourceFor(req,v.sourceId);
-    const items=catalog.normalizeCards(source,await engine.invoke(source.id,'searchNovels',[v.q,v.page]));
-    return {items,page:v.page,hasMore:items.length>0};
+    const v=discoveryQuery.extend({q:z.string().trim().min(1).max(500)}).parse(req.query);
+    const pages=discoveryCursor(v.cursor),sources=await discoverySources(req,v);
+    return discoverNovels(engine,sources,{page:v.page,pages,query:v.q});
   });
   app.get('/api/novels/detail',async req=>{
     const v=z.object({sourceId,path:z.string().min(1).max(8000)}).parse(req.query);

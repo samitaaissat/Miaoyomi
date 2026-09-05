@@ -3,8 +3,8 @@ import Link from 'next/link';
 import type { NovelCard as NovelCardType } from '@/lib/novels/types';
 import { Img } from '@/components/ui';
 
-export function NovelCard({ novel, progress }: { novel: NovelCardType; progress?: number }) {
-  const href = novel.id
+export function NovelCard({ novel, progress, sourceName, fromSource = false }: { novel: NovelCardType; progress?: number; sourceName?: string; fromSource?: boolean }) {
+  const href = novel.id && !fromSource
     ? `/novels/title?id=${encodeURIComponent(novel.id)}`
     : `/novels/title?sourceId=${encodeURIComponent(novel.sourceId)}&path=${encodeURIComponent(novel.path)}`;
   return (
@@ -24,6 +24,7 @@ export function NovelCard({ novel, progress }: { novel: NovelCardType; progress?
         )}
       </div>
       <h3 className="mt-2 line-clamp-2 text-sm font-semibold leading-snug text-fog-100 transition group-hover:text-accent">{novel.title}</h3>
+      {sourceName && <p className="mt-1 truncate text-xs text-fog-500">{sourceName}</p>}
     </Link>
   );
 }

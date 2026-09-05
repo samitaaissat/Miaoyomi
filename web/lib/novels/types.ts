@@ -23,4 +23,6 @@ export interface NovelPayload {
   archiveRevision: string; previousChapterId?: string; nextChapterId?: string;
 }
 export interface NovelProgress { chapterId: string; position: number; completed: boolean; updatedAt: number; mutationId: string }
-export interface NovelPage { items: NovelCard[]; page: number; hasMore: boolean }
+export interface NovelDiscoveryScope { sourceIds?: string[]; lang?: string }
+export interface NovelSourceError { sourceId: string; sourceName: string; message: string; code: string }
+export interface NovelPage { items: NovelCard[]; page: number; hasMore: boolean; nextCursor?: string; errors?: NovelSourceError[] }

@@ -1837,7 +1837,7 @@ function Extensions({ span = '' }: { span?: string }) {
       const r = await api<{ count: number }>('/api/admin/extensions/refresh', { json: {} });
       refreshAll();
       toast(`Refreshed — ${r.count} extension${r.count === 1 ? '' : 's'} available`, 'success');
-    } catch { toast('Could not refresh the list', 'error'); }
+    } catch (e: any) { toast(msgOf(e, 'Could not refresh the list'), 'error'); }
     setBusy(null);
   };
 
@@ -1848,9 +1848,12 @@ function Extensions({ span = '' }: { span?: string }) {
       const r = await api<{ url: string; corrected: boolean; total: number }>('/api/admin/extensions/repos', { json: { url: repoUrl.trim() } });
       setRepoUrl('');
       refreshAll();
-      toast(r.total ? `Added — ${r.total} extension${r.total === 1 ? '' : 's'} available${r.corrected ? ' (used the full index)' : ''}`
+      toast(r.total ? `Added — ${r.total} extension${r.total === 1 ? '' : 's'} available${r.corrected ? ' (repository URL resolved)' : ''}`
                     : 'Added, but that repository returned no extensions', r.total ? 'success' : 'error');
-    } catch (e: any) { toast(msgOf(e, 'Could not add that repository'), 'error'); }
+    } catch (e: any) {
+      refreshAll(); // Registration may have succeeded even if refreshing the catalogue failed.
+      toast(msgOf(e, 'Could not add that repository'), 'error');
+    }
     setAddingRepo(false);
   };
 
@@ -1920,8 +1923,8 @@ function Extensions({ span = '' }: { span?: string }) {
                 </div>
                 <p className="text-[10px] leading-relaxed text-fog-600">
                   Uchiyomi doesn&apos;t host extensions, so you point it at a repository you trust — the same URL you&apos;d
-                  use in Mihon. If it hands back an empty list, Uchiyomi retries the full <code>index.json</code>, which is
-                  where most repositories now keep the real catalogue.
+                  use in Mihon. Both <code>index.pb</code> and <code>index.json</code> are supported. The extension
+                  engine checks the repository before adding it and reports errors loading the index here.
                 </p>
               </div>
             )}

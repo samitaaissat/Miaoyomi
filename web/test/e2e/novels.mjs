@@ -19,6 +19,9 @@ const users = {
 let active = 'a';
 let failChapterNetwork = false;
 const browseRequests = [];
+const searchRequests = [];
+const detailRequests = [];
+let failNextBrowsePage = false;
 const exportRequests = [];
 const progressRequests = [];
 const payload = {
@@ -37,6 +40,8 @@ const detail = {
 const sources = { sources: [
   { id: 'royalroad', name: 'Royal Road', lang: 'en', site: 'https://fiction.test', version: '2.3.1', enabled: true, supported: true, supportsLatest: true,
     filters: { orderBy: { type: 'Picker', label: 'Order', value: 'views', options: [{ label: 'Views', value: 'views' }, { label: 'Rating', value: 'rating' }] } } },
+  { id: 'scribblehub', name: 'Scribble Hub', lang: 'en', site: 'https://scribble.test', version: '1.0.0', enabled: true, supported: true, supportsLatest: false },
+  { id: 'slow', name: 'Slow Fiction', lang: 'fr', site: 'https://slow.test', version: '1.0.0', enabled: true, supported: true, supportsLatest: true },
   { id: 'challenge', name: 'Challenge Fiction', lang: 'en', site: 'https://blocked.test', version: '1.0.0', enabled: false, supported: false, supportsLatest: false, reason: 'This source requires a browser challenge.' },
 ] };
 
@@ -60,10 +65,31 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/novels/browse') {
     browseRequests.push(url.search);
     const page = Number(url.searchParams.get('page'));
-    return json(res, 200, { items: page === 1 ? [{ sourceId: 'royalroad', path: detail.path, title: detail.title }] : [{ sourceId: 'royalroad', path: '/fiction/second', title: 'Second Light' }], page, hasMore: page === 1 });
+    if (page > 1 && failNextBrowsePage) { failNextBrowsePage = false; return json(res, 503, { message: 'Page temporarily unavailable.' }); }
+    const selected = url.searchParams.getAll('sourceIds');
+    if (url.searchParams.has('sourceId')) selected.push(url.searchParams.get('sourceId'));
+    const eligible = sources.sources.filter((source) => source.enabled && source.supported
+      && (!selected.length || selected.includes(source.id))
+      && (!url.searchParams.has('lang') || source.lang === url.searchParams.get('lang'))
+      && (url.searchParams.get('mode') !== 'latest' || source.supportsLatest));
+    const items = [];
+    if (eligible.some((source) => source.id === 'royalroad')) items.push(...(page === 1
+      ? [{ sourceId: 'royalroad', path: detail.path, title: detail.title }]
+      : [{ sourceId: 'royalroad', path: '/fiction/second', title: 'Second Light' }]));
+    if (page === 1 && eligible.some((source) => source.id === 'scribblehub')) items.push({ sourceId: 'scribblehub', path: detail.path, title: 'Ink and Ash' });
+    const errors = eligible.some((source) => source.id === 'slow') ? [{ sourceId: 'slow', sourceName: 'Slow Fiction', code: 'timeout', message: 'Source timed out.' }] : [];
+    return json(res, 200, { items: items.map((item) => ({ ...item, id: `discovered-${item.sourceId}` })), page, hasMore: page === 1 && items.length > 0, nextCursor: page === 1 && items.length > 0 ? 'browse-next+/=' : undefined, errors });
   }
-  if (url.pathname === '/api/novels/search') return json(res, 200, { items: [{ sourceId: 'royalroad', path: detail.path, title: detail.title }], page: 1, hasMore: false });
-  if (url.pathname === '/api/novels/detail' || url.pathname === '/api/novels/novel-1') return json(res, 200, detail);
+  if (url.pathname === '/api/novels/search') {
+    searchRequests.push(url.search);
+    const page = Number(url.searchParams.get('page'));
+    return json(res, 200, { items: page === 1
+      ? [{ id: 'discovered-royalroad', sourceId: 'royalroad', path: detail.path, title: detail.title }, { id: 'discovered-scribblehub', sourceId: 'scribblehub', path: detail.path, title: 'Ink and Ash' }]
+      : [{ id: 'discovered-royalroad', sourceId: 'royalroad', path: detail.path, title: detail.title }, { id: 'discovered-search', sourceId: 'scribblehub', path: '/fiction/search-second', title: 'A Search Beyond' }], page,
+      hasMore: page === 1, nextCursor: page === 1 ? 'search-next+/=' : undefined, errors: [] });
+  }
+  if (url.pathname === '/api/novels/detail' || url.pathname === '/api/novels/novel-1') { detailRequests.push(url.pathname + url.search); return json(res, 200, detail); }
+  if (url.pathname.startsWith('/api/novels/discovered-')) return json(res, 404, { message: 'This title has not been opened from its source yet.' });
   if (url.pathname === '/api/novels/library') return json(res, 200, { items: active === 'a' ? [{ ...detail, inLibrary: true, progress: null }] : [] });
   if (url.pathname === '/api/novels/novel-1/export.epub') {
     exportRequests.push(req.headers.authorization);
@@ -109,17 +135,78 @@ try {
   await page.setViewport({ width: 412, height: 915, deviceScaleFactor: 1 });
   await page.goto(`${base}/novels/`, { waitUntil: 'networkidle2' });
   await page.waitForFunction(() => document.body.innerText.includes('The Glass Orchard'));
+  const firstBrowse = new URLSearchParams(browseRequests[0]);
+  assert.equal(firstBrowse.has('sourceId'), false, 'discovery automatically selected its first source');
+  assert.equal(firstBrowse.has('sourceIds'), false, 'discovery narrowed its default source scope');
+  assert.ok(await page.evaluate(() => document.body.innerText.includes('Ink and Ash')), 'default discovery omitted another source');
+  assert.equal(await page.$('select[aria-label="Novel source"]'), null, 'discovery still requires the standalone source picker');
+  const discoveredHref = await page.evaluate(() => [...document.querySelectorAll('a')].find((node) => node.textContent.includes('The Glass Orchard'))?.getAttribute('href'));
+  assert.ok(discoveredHref.includes('sourceId=royalroad'), 'a discovery id was treated as an already saved novel');
+  assert.ok(await page.evaluate(() => [...document.querySelectorAll('a')].some((node) => node.textContent.includes('Ink and Ash') && node.textContent.includes('Scribble Hub'))), 'novel cards omitted their source attribution');
+  assert.ok(await page.evaluate(() => document.querySelector('[role="status"]')?.textContent.includes('Slow Fiction')), 'partial source failure was hidden');
+  const mobileLayout = await page.evaluate(() => ({ width: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth }));
+  assert.ok(mobileLayout.scroll <= mobileLayout.width + 1, `mobile novel discovery overflows by ${mobileLayout.scroll - mobileLayout.width}px`);
+  await page.screenshot({ path: join(artifacts, 'task-3-novel-discover-aggregate.png'), fullPage: true });
+  failNextBrowsePage = true;
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((node) => node.textContent?.trim() === 'Load more')?.click());
+  await page.waitForFunction(() => document.body.innerText.includes('Page temporarily unavailable.'));
+  assert.ok(await page.evaluate(() => document.body.innerText.includes('The Glass Orchard') && document.body.innerText.includes('Ink and Ash')), 'a failed next page erased existing results');
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((node) => node.textContent?.trim() === 'Retry loading more')?.click());
+  await page.waitForFunction(() => document.body.innerText.includes('Second Light'));
+  assert.equal(new URLSearchParams(browseRequests.at(-1)).get('cursor'), 'browse-next+/=', 'browse lost the per-source continuation');
   await page.click('details summary');
+  await page.click('input[aria-label="Source Royal Road"]');
+  await page.waitForFunction(() => !document.body.innerText.includes('Ink and Ash'));
   await page.select('details select', 'rating');
   await page.waitForFunction(() => document.body.innerText.includes('Load more'));
   await page.evaluate(() => [...document.querySelectorAll('button')].find((node) => node.textContent?.includes('Load more'))?.click());
   await page.waitForFunction(() => document.body.innerText.includes('Second Light'));
   assert.ok(browseRequests.some((query) => query.includes('page=2')), 'browse pagination did not request page 2');
   assert.ok(browseRequests.some((query) => decodeURIComponent(query).includes('"value":"rating"')), 'typed filter value did not reach the browse request');
+  await page.click('input[aria-label="Source Scribble Hub"]');
+  await page.waitForFunction(() => document.body.innerText.includes('Ink and Ash'));
+  const narrowedBrowse = new URLSearchParams(browseRequests.at(-1));
+  assert.deepEqual(narrowedBrowse.getAll('sourceIds'), ['royalroad', 'scribblehub'], 'multiple source selection did not reach browse');
+  assert.equal(narrowedBrowse.get('page'), '1', 'source selection kept the previous page');
+  assert.equal(narrowedBrowse.has('cursor'), false, 'source selection kept the previous cursor');
+  assert.equal(narrowedBrowse.has('filters'), false, 'single-source filters leaked into aggregated requests');
+  await page.type('input[aria-label="Search novels"]', 'glass');
+  await page.click('button[type="submit"]');
+  await page.waitForFunction(() => document.body.textContent.includes('Results for “glass”'));
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((node) => node.textContent?.trim() === 'Load more')?.click());
+  await page.waitForFunction(() => document.body.innerText.includes('A Search Beyond'));
+  const searchPage = new URLSearchParams(searchRequests.at(-1));
+  assert.deepEqual(searchPage.getAll('sourceIds'), ['royalroad', 'scribblehub']);
+  assert.equal(searchPage.get('cursor'), 'search-next+/=', 'search lost its source continuation');
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll('h3')].filter((node) => node.textContent === 'The Glass Orchard').length), 1, 'pagination repeated the same source title');
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((node) => node.textContent?.trim() === 'All sources')?.click());
+  await page.waitForNetworkIdle();
+  assert.equal(new URLSearchParams(searchRequests.at(-1)).has('sourceIds'), false, 'all-sources reset did not apply during search');
   await page.screenshot({ path: join(artifacts, 'task-3-novel-discover.png'), fullPage: true });
 
-  await page.goto(`${base}/novels/title/?sourceId=royalroad&path=${encodeURIComponent(detail.path)}`, { waitUntil: 'networkidle2' });
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((node) => node.textContent?.trim() === 'Clear')?.click());
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((node) => node.textContent?.trim() === 'Latest')?.click());
+  await page.waitForNetworkIdle();
+  const latestBrowse = new URLSearchParams(browseRequests.at(-1));
+  assert.equal(latestBrowse.get('mode'), 'latest');
+  assert.equal(latestBrowse.get('page'), '1', 'switching mode kept the old page');
+  assert.equal(latestBrowse.has('cursor'), false, 'switching mode kept the old cursor');
+  assert.ok(!await page.evaluate(() => document.body.innerText.includes('Ink and Ash')), 'latest included a source without latest support');
+  await page.click('input[aria-label="Source Slow Fiction"]');
+  await page.waitForFunction(() => document.body.innerText.includes('No titles available yet'));
+  assert.ok(await page.evaluate(() => document.querySelector('[role="status"]')?.textContent.includes('Slow Fiction')), 'complete source failure looked like successful empty results');
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((node) => node.textContent?.trim() === 'en')?.click());
+  await page.waitForNetworkIdle();
+  assert.ok(await page.evaluate(() => document.querySelector('input[aria-label="Source Slow Fiction"]')?.checked), 'changing language silently cleared an explicit source filter');
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((node) => node.textContent?.trim() === 'All sources')?.click());
+  await page.waitForFunction(() => document.body.innerText.includes('The Glass Orchard'));
+  const languageBrowse = new URLSearchParams(browseRequests.at(-1));
+  assert.equal(languageBrowse.get('lang'), 'en');
+  assert.equal(languageBrowse.has('sourceIds'), false);
+
+  await page.evaluate(() => [...document.querySelectorAll('a')].find((node) => node.textContent.includes('The Glass Orchard'))?.click());
   await page.waitForFunction(() => document.body.innerText.includes('Start reading'));
+  assert.ok(detailRequests.some((request) => request.startsWith('/api/novels/detail?') && request.includes('sourceId=royalroad')), 'opening a discovered card did not hydrate its source details');
   await page.evaluate(() => [...document.querySelectorAll('button')].find((node) => node.textContent?.includes('Export saved EPUB'))?.click());
   await page.waitForNetworkIdle();
   assert.deepEqual(exportRequests, ['Bearer token-a'], 'EPUB export did not use authenticated binary fetch');

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeFilters, serializeFilters, setExcludableValue } from '../lib/novels/filters';
-import { novelBrowseUrl, novelDetailUrl } from '../lib/novels/client';
+import { novelBrowseUrl, novelSearchUrl, novelDetailUrl } from '../lib/novels/client';
 import { sanitizeNovelHtml } from '../lib/novels/content';
 
 test('published plugin filter definitions retain their runtime type and value shape', () => {
@@ -40,6 +40,20 @@ test('browse and title URLs follow the static query-route contract', () => {
   );
   assert.equal(novelDetailUrl({ sourceId: 'ao3', path: '/works/42' }), '/api/novels/detail?sourceId=ao3&path=%2Fworks%2F42');
   assert.equal(novelDetailUrl({ id: 'saved-42' }), '/api/novels/saved-42');
+});
+
+test('discovery defaults to every source and preserves selected sources and continuation in requests', () => {
+  assert.equal(novelBrowseUrl({}, 'popular', 1), '/api/novels/browse?mode=popular&page=1');
+  assert.equal(novelSearchUrl({ sourceIds: [] }, 'glass orchard', 1), '/api/novels/search?q=glass+orchard&page=1');
+  const browse = new URL(novelBrowseUrl({ sourceIds: ['royal road', 'ao3'], lang: 'en' }, 'latest', 2, undefined, 'next+/='), 'https://yomi.test');
+  assert.deepEqual(browse.searchParams.getAll('sourceIds'), ['royal road', 'ao3']);
+  assert.equal(browse.searchParams.has('sourceId'), false);
+  assert.equal(browse.searchParams.get('lang'), 'en');
+  assert.equal(browse.searchParams.get('cursor'), 'next+/=');
+  const search = new URL(novelSearchUrl({ sourceIds: ['ao3'] }, 'glass & snow', 2, 'search+/='), 'https://yomi.test');
+  assert.deepEqual(search.searchParams.getAll('sourceIds'), ['ao3']);
+  assert.equal(search.searchParams.get('q'), 'glass & snow');
+  assert.equal(search.searchParams.get('cursor'), 'search+/=');
 });
 
 test('reader content drops active and source-styled markup', () => {

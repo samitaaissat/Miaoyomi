@@ -15,6 +15,13 @@ export async function runPlugin(script, method, args = [], options = {}) {
   const controller = new AbortController();
   const pending = new Set(); let closed = false; let hostFailure;
   const deferred = new Set();
+  // Timers are invocation-local guest callbacks, never Node timer objects. The
+  // same bounded event loop handles timers and network promise jobs.
+  const timers = new Map(); let timerSequence = 0;
+  const clearTimer = id => {
+    const timer = timers.get(id);
+    if (timer) { timers.delete(id); timer.callback.dispose(); }
+  };
   const check = result => {
     if (result.error) { const error = vm.dump(result.error); result.error.dispose(); throw new EngineError(Date.now() >= deadline ? 'DEADLINE' : error.code || 'SOURCE_ERROR', error.message || String(error), Date.now() >= deadline ? 504 : error.code === 'UNSUPPORTED_CAPABILITY' ? 409 : 502); }
     return result.value;
@@ -36,6 +43,15 @@ export async function runPlugin(script, method, args = [], options = {}) {
     return promise.handle;
   });
   vm.setProp(vm.global, '__hostFetch', host); host.dispose();
+  const setTimer = vm.newFunction('__hostSetTimer', (callback, delay, repeat) => {
+    if (timers.size >= 1024) return vm.newNumber(0);
+    const id = ++timerSequence; const milliseconds = vm.getNumber(delay);
+    timers.set(id, { callback: callback.dup(), delay: milliseconds, repeat: vm.getNumber(repeat) === 1, due: Date.now() + milliseconds });
+    return vm.newNumber(id);
+  });
+  const cancelTimer = vm.newFunction('__hostClearTimer', id => { clearTimer(vm.getNumber(id)); });
+  vm.setProp(vm.global, '__hostSetTimer', setTimer); setTimer.dispose();
+  vm.setProp(vm.global, '__hostClearTimer', cancelTimer); cancelTimer.dispose();
   try {
     check(vm.evalCode('globalThis.__storageSeed = ' + JSON.stringify(options.storageSnapshot || {}) + ';')).dispose();
     check(vm.evalCode(bundle, 'host-library-bundle.js')).dispose();
@@ -57,6 +73,20 @@ export async function runPlugin(script, method, args = [], options = {}) {
       if (jobs.error) { const error = vm.dump(jobs.error); jobs.error.dispose(); throw new EngineError(Date.now() >= deadline ? 'DEADLINE' : 'SOURCE_ERROR', error.message, Date.now() >= deadline ? 504 : 502); }
       const done = vm.getProp(vm.global, '__done'); const finished = vm.dump(done); done.dispose();
       if (finished) break;
+      let next;
+      for (const [id, timer] of timers) if (!next || timer.due < next.timer.due) next = { id, timer };
+      if (next && next.timer.due <= Date.now()) {
+        // Retain a separate handle while running: an interval may cancel itself.
+        const callback = next.timer.callback.dup();
+        if (next.timer.repeat) next.timer.due = Date.now() + next.timer.delay;
+        else clearTimer(next.id);
+        try { check(vm.callFunction(callback, vm.global)).dispose(); }
+        finally { callback.dispose(); }
+        // A busy interval must not starve the host's network event loop.
+        await pause(0);
+        // Drain promise jobs after each callback, before another timer fires.
+        continue;
+      }
       await Promise.race([...pending, pause(5)]);
     }
     if (hostFailure) throw hostFailure;
@@ -71,6 +101,7 @@ export async function runPlugin(script, method, args = [], options = {}) {
     return { result: JSON.parse(result), storage: JSON.parse(serialized) };
   } finally {
     closed = true; controller.abort();
+    for (const id of timers.keys()) clearTimer(id);
     for (const promise of deferred) promise.dispose();
     vm.dispose(); runtime.dispose();
   }

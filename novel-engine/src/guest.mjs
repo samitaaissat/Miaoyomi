@@ -17,6 +17,17 @@ class Storage {
 const unsupported = name => { throw Object.assign(new Error(`Unsupported host capability: ${name}`), { code: 'UNSUPPORTED_CAPABILITY' }); };
 const bridge = globalThis.__hostFetch;
 delete globalThis.__hostFetch;
+const scheduleTimer = globalThis.__hostSetTimer;
+const cancelTimer = globalThis.__hostClearTimer;
+delete globalThis.__hostSetTimer;
+delete globalThis.__hostClearTimer;
+function timer(callback, delay, repeat, args) {
+  if (typeof callback !== 'function') throw new TypeError('Timer callback must be a function');
+  const milliseconds = Math.max(1, Math.min(2147483647, Math.trunc(Number(delay) || 0)));
+  const id = scheduleTimer(() => Reflect.apply(callback, globalThis, args), milliseconds, repeat);
+  if (!id) throw Object.assign(new Error('Too many pending timers'), { code: 'TIMER_LIMIT' });
+  return id;
+}
 class Headers {
   values = new Map();
   constructor(init = {}) { for (const [key, value] of init instanceof Headers || Array.isArray(init) ? init : Object.entries(init)) this.set(key, value); }
@@ -62,7 +73,7 @@ delete globalThis.__storageSeed;
 globalThis.__exportStorage = () => Object.fromEntries(Object.entries(stores).map(([name, store]) => [name, Array.from(store.data)]));
 const modules = Object.assign(Object.create(null), {
   cheerio, htmlparser2, dayjs,
-  '@libs/fetch': { fetchApi, fetchText: async (...args) => (await fetchApi(...args)).text(), fetchProto: () => unsupported('fetchProto'), fetchFile: () => unsupported('fetchFile') },
+  '@libs/fetch': { fetchApi, fetchText: async (...args) => (await fetchApi(...args)).text(), fetchWebView: async (url, init = {}) => (await fetchApi(url, { ...init, useWebView: true })).text(), fetchProto: () => unsupported('fetchProto'), fetchFile: () => unsupported('fetchFile') },
   '@libs/storage': stores,
   '@libs/novelStatus': { NovelStatus: status },
   '@/types/constants': { NovelStatus: status, defaultCover: '' },
@@ -73,7 +84,8 @@ const modules = Object.assign(Object.create(null), {
 globalThis.require = name => Object.hasOwn(modules, name) ? modules[name] : unsupported(`module ${name}`);
 globalThis.fetch = fetchApi;
 globalThis.console = { log() {}, warn() {}, error() {}, debug() {} };
-globalThis.setTimeout = () => unsupported('timers');
-globalThis.setInterval = () => unsupported('timers');
+globalThis.setTimeout = (callback, delay = 0, ...args) => timer(callback, delay, 0, args);
+globalThis.setInterval = (callback, delay = 0, ...args) => timer(callback, delay, 1, args);
+globalThis.clearTimeout = globalThis.clearInterval = id => cancelTimer(Number(id));
 globalThis.exports = {};
 globalThis.module = { exports: globalThis.exports };

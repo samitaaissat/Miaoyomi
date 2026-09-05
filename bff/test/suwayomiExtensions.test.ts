@@ -105,14 +105,103 @@ test('repository urls keep their meaning and only lose stray whitespace', async 
   assert.equal(normalizeRepoUrl('https://example.org/re po/index.json'), 'https://example.org/repo/index.json');
 });
 
-test('reading and writing repositories round-trips', async () => {
-  const { getRepos, setRepos } = await load();
-  assert.deepEqual(await getRepos(answer({ settings: { extensionRepos: ['https://example.org/a.json'] } })), ['https://example.org/a.json']);
-  assert.deepEqual(await getRepos(answer({ settings: { extensionRepos: null } })), []);
+test('repositories are read from the native extension-store query', async () => {
+  const { getRepos } = await load();
+  let seen = '';
+  const run = (async (query: string) => {
+    seen = query;
+    return { extensionStores: { nodes: [
+      { indexUrl: 'https://example.org/a.pb' },
+      { indexUrl: 'https://example.org/b.pb' },
+    ] } };
+  }) as never;
+  const repos = await getRepos(run);
+
+  assert.deepEqual(repos, ['https://example.org/a.pb', 'https://example.org/b.pb']);
+  assert.match(seen, /extensionStores\s*\{\s*nodes\s*\{\s*indexUrl/);
+  assert.ok(!seen.includes('extensionRepos'), 'the deprecated, racy settings bridge was queried');
+  assert.deepEqual(await getRepos(answer({ extensionStores: { nodes: [] } })), []);
   assert.deepEqual(await getRepos(answer({})), []);
-  const seen: string[] = [];
-  await setRepos(['https://example.org/b.json'], answer({ setSettings: { settings: { extensionRepos: ['https://example.org/b.json'] } } }, seen));
-  assert.ok(seen[0].includes('example.org/b.json'), seen[0]);
+});
+
+test('adding a repository waits for Suwayomi to register it and returns its canonical URL', async () => {
+  const { addRepo } = await load();
+  const calls: Array<{ query: string; variables: Record<string, unknown> }> = [];
+  const run = (async (query: string, variables: Record<string, unknown> = {}) => {
+    calls.push({ query, variables });
+    return { addExtensionStore: { extensionStore: {
+      indexUrl: 'https://example.org/repo/index.pb', name: 'Example',
+    } } };
+  }) as never;
+
+  assert.equal(await addRepo('https://example.org/repo/repo.json', run), 'https://example.org/repo/index.pb');
+  assert.equal(calls[0].variables.url, 'https://example.org/repo/repo.json');
+  assert.match(calls[0].query, /addExtensionStore\s*\(\s*input:\s*\{\s*indexUrl:\$url/);
+});
+
+test('removing a repository uses the native extension-store mutation', async () => {
+  const { removeRepo } = await load();
+  const calls: Array<{ query: string; variables: Record<string, unknown> }> = [];
+  const run = (async (query: string, variables: Record<string, unknown> = {}) => {
+    calls.push({ query, variables });
+    return { removeExtensionStore: { extensionStore: { indexUrl: variables.url } } };
+  }) as never;
+
+  await removeRepo('https://example.org/repo/index.pb', run);
+  assert.equal(calls[0].variables.url, 'https://example.org/repo/index.pb');
+  assert.match(calls[0].query, /removeExtensionStore\s*\(\s*input:\s*\{\s*indexUrl:\$url/);
+});
+
+test('replacing repositories finishes every add before removing old stores and keeps canonical URLs', async () => {
+  const { setRepos } = await load();
+  const ops: string[] = [];
+  let repos = ['https://example.org/old/index.pb'];
+  const run = (async (query: string, variables: Record<string, any> = {}) => {
+    if (/extensionStores\s*\{/.test(query)) {
+      ops.push('list');
+      return { extensionStores: { nodes: repos.map((indexUrl) => ({ indexUrl })) } };
+    }
+    if (/addExtensionStore/.test(query)) {
+      ops.push(`add:${variables.url}`);
+      const canonical = 'https://example.org/new/index.pb';
+      repos.push(canonical);
+      return { addExtensionStore: { extensionStore: { indexUrl: canonical } } };
+    }
+    if (/removeExtensionStore/.test(query)) {
+      ops.push(`remove:${variables.url}`);
+      repos = repos.filter((url) => url !== variables.url);
+      return { removeExtensionStore: { extensionStore: { indexUrl: variables.url } } };
+    }
+    throw new Error(`unexpected operation: ${query}`);
+  }) as never;
+
+  const result = await setRepos(['https://example.org/new/repo.json'], run);
+
+  assert.deepEqual(result, ['https://example.org/new/index.pb']);
+  assert.deepEqual(repos, ['https://example.org/new/index.pb']);
+  assert.deepEqual(ops, [
+    'list',
+    'add:https://example.org/new/repo.json',
+    'remove:https://example.org/old/index.pb',
+  ]);
+});
+
+test('a failed add leaves every existing repository in place and surfaces the failure', async () => {
+  const { setRepos } = await load();
+  const old = 'https://example.org/old/index.pb';
+  const ops: string[] = [];
+  const run = (async (query: string) => {
+    if (/extensionStores\s*\{/.test(query)) return { extensionStores: { nodes: [{ indexUrl: old }] } };
+    if (/addExtensionStore/.test(query)) { ops.push('add'); throw new Error('store rejected'); }
+    if (/removeExtensionStore/.test(query)) { ops.push('remove'); return {}; }
+    throw new Error(`unexpected operation: ${query}`);
+  }) as never;
+
+  await assert.rejects(
+    setRepos(['https://example.org/new/index.pb'], run),
+    /store rejected/,
+  );
+  assert.deepEqual(ops, ['add'], 'an existing store was removed after the replacement failed');
 });
 
 test('refreshing the repositories passes its timeout through to the transport', async () => {
@@ -137,7 +226,7 @@ test('refreshing the repositories passes its timeout through to the transport', 
   assert.equal(timeouts[1], 300000, 'refreshExtensions ignored the timeout it was given');
 });
 
-test('a repository that yields nothing gets one alternative url to try', async () => {
+test('a rejected repository gets one alternative url to try', async () => {
   const { altRepoUrl } = await load();
   // insurance for varying repository layouts; the caller only keeps it if it actually returns more
   assert.equal(altRepoUrl('https://example.org/repo/index.min.json'), 'https://example.org/repo/index.json');

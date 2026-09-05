@@ -93,8 +93,11 @@ function fakeGql(state: { refreshed: boolean; updated: string[] }) {
   return (async (query: string, variables: Record<string, any> = {}) => {
     if (/fetchExtensions/.test(query)) { state.refreshed = true; return { fetchExtensions: { extensions: [{ pkgName: 'int.test.a' }] } }; }
     if (/updateExtension\(/.test(query)) { state.updated.push(variables.id); return { updateExtension: { extension: { pkgName: variables.id, isInstalled: true } } }; }
-    if (/setSettings/.test(query)) return { setSettings: { settings: { extensionRepos: variables.r } } };
-    if (/extensionRepos/.test(query)) return { settings: { extensionRepos: ['https://r/index.json'] } };
+    if (/addExtensionStore/.test(query)) return { addExtensionStore: { extensionStore: { indexUrl: variables.url } } };
+    if (/removeExtensionStore/.test(query)) return { removeExtensionStore: { extensionStore: { indexUrl: variables.url } } };
+    if (/extensionStores\s*\{/.test(query)) {
+      return { extensionStores: { nodes: [{ indexUrl: 'https://r/index.json' }] } };
+    }
     return { extensions: { nodes: [{
       pkgName: 'int.test.a', name: 'Integration One', lang: 'en',
       versionName: state.updated.length ? '2.0' : '1.0', iconUrl: null,

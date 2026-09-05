@@ -79,7 +79,7 @@ Guest settings (the interactive wizard asks for these):
   --nesting yes|no       Enable the Alpine LXC nesting feature if needed [no]
 
 Maintenance (no new LXC; specify an existing solver ID or URL):
-  --reconnect APP_ID     Rediscover solver IP and update both application connections
+  --reconnect APP_ID     Rediscover solver IP and update manga and novel connections
   --update-solver APP_ID Run the paired solver's official updater, then reconnect
 
   --yes                 Use supplied settings/defaults and skip prompts/confirmation

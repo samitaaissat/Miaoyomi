@@ -16,11 +16,11 @@ import { logAudit, recentAudit } from '../lib/audit';
 import { healthAll, setDisabled, clearBlock, SourceHealth, pruneOrphanedHealth } from '../lib/sourceHealth';
 import { smokeTest, probeBase } from '../lib/sourceProbe';
 import { runSourceCheck, checkRunning } from '../lib/sourceWatchdog';
-import { runExtensionMonitor, runExtensionCheck, extState } from '../lib/extensionMonitor';
+import { runExtensionMonitor, runExtensionCheck, extState, liveStore } from '../lib/extensionMonitor';
 import { diagnose } from '../lib/sourceDiagnosis';
 import { readSites, writeSites } from '../lib/sources/customSites';
 import { reloadAll, listSources, getSource, detectEngine, listRemoteSources, suwayomiConfigured, suwayomiAbout, swAdapterId } from '../lib/sources';
-import { listExtensions, refreshExtensions, setExtensionState, sourcesOfExtension, getRepos, setRepos, normalizeRepoUrl, altRepoUrl } from '../lib/sources/suwayomi/extensions';
+import { listExtensions, refreshExtensions, setExtensionState, sourcesOfExtension, getRepos, addRepo, removeRepo, normalizeRepoUrl, altRepoUrl } from '../lib/sources/suwayomi/extensions';
 import { readFile, writeFile, mkdir, rm } from 'fs/promises';
 import { dirname } from 'path';
 import sharp from 'sharp';
@@ -1221,59 +1221,49 @@ export default async function adminRoutes(app: FastifyInstance) {
     if (!b.success) return reply.code(400).send({ error: 'bad_request', message: 'That does not look like a repository URL.' });
 
     const wanted = normalizeRepoUrl(b.data.url);
-    const current = await getRepos().catch((): string[] => []);
-    if (current.includes(wanted)) return reply.code(409).send({ error: 'exists', message: 'That repository is already added.' });
+    let used: string | undefined;
+    try {
+      const current = await getRepos();
+      if (current.includes(wanted)) return reply.code(409).send({ error: 'exists', message: 'That repository is already added.' });
 
-    const before = (await listExtensions().catch(() => [])).length;
-    let error: string | undefined;
-
-    // Suwayomi applies a settings change asynchronously, so the FIRST read after adding a repository still
-    // sees the old list and comes back empty. Retry until the catalogue actually grows.
-    const attempt = async (url: string): Promise<number> => {
-      await setRepos([...current, url]);
-      let n = before;
-      for (let i = 0; i < 4; i++) {
-        try {
-          await refreshExtensions();
-          error = undefined;
-        } catch (e) {
-          error = (e as Error)?.message || 'could not read that repository';
-        }
-        n = (await listExtensions().catch(() => [])).length;
-        if (n > before) break;
-        await new Promise((r) => setTimeout(r, 700));
+      // The store mutation waits for the index download and database registration. The deprecated
+      // settings write only acknowledged an asynchronous change; refreshing could keep seeing no store.
+      try {
+        used = await addRepo(wanted);
+      } catch (error) {
+        const alt = altRepoUrl(wanted);
+        if (!alt || alt === wanted) throw error;
+        used = await addRepo(alt);
       }
-      return n;
-    };
 
-    let used = wanted;
-    let total = await attempt(wanted);
-
-    // Still nothing after retrying? Repository layouts vary, and a bare directory URL is a reasonable thing
-    // to paste, so try the full-index form of the same URL as a last resort -- keeping it only if it did
-    // better, since for many repositories the original form is the correct one.
-    if (total <= before) {
-      const alt = altRepoUrl(wanted);
-      if (alt && alt !== wanted) {
-        const altTotal = await attempt(alt);
-        if (altTotal > total) { used = alt; total = altTotal; }
-        else await setRepos([...current, wanted]); // no better; keep what they typed
-      }
+      // Keep the restore copy aligned with deliberate admin changes, even if the later refresh fails.
+      await liveStore.saveRepos(await getRepos());
+      await refreshExtensions();
+      const total = (await listExtensions()).length;
+      await logAudit('extension.repo_add', { userId: userIdOf(req), detail: { url: used, extensions: total }, req });
+      return { ok: true, url: used, corrected: used !== wanted, total };
+    } catch (e) {
+      const reason = (e as Error)?.message || 'Could not read that repository.';
+      return reply.code(502).send({
+        error: 'failed',
+        message: used ? `Repository registered, but setup could not finish: ${reason}` : reason,
+      });
     }
-
-    await logAudit('extension.repo_add', { userId: userIdOf(req), detail: { url: used, extensions: total }, req });
-    return { ok: true, url: used, corrected: used !== wanted, total, error };
   });
 
   app.delete('/api/admin/extensions/repos', async (req, reply) => {
     if (needExt(reply)) return;
     const b = z.object({ url: z.string().max(500) }).safeParse(req.body);
     if (!b.success) return reply.code(400).send({ error: 'bad_request' });
-    const current = await getRepos().catch((): string[] => []);
-    await setRepos(current.filter((u) => u !== b.data.url));
-    await refreshExtensions().catch(() => 0);
-    await logAudit('extension.repo_remove', { userId: userIdOf(req), detail: { url: b.data.url }, req });
-    return { ok: true };
+    try {
+      await removeRepo(b.data.url);
+      await liveStore.saveRepos(await getRepos());
+      await refreshExtensions().catch(() => 0);
+      await logAudit('extension.repo_remove', { userId: userIdOf(req), detail: { url: b.data.url }, req });
+      return { ok: true };
+    } catch (e) {
+      return reply.code(502).send({ error: 'failed', message: (e as Error)?.message || 'Could not remove that repository.' });
+    }
   });
 
   // ---- library health ----

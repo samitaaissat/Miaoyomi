@@ -13,6 +13,11 @@ You browse and install them from **Admin → Providers → Extensions**. There i
 3. **Search and click Add.** The extension installs, its sources switch on straight away, and it is
    searchable from Discover immediately. No second step, no restart.
 
+Both Protobuf (`index.pb`) and JSON (`index.json`) repository indexes work with the bundled Suwayomi
+v2.3.2243 engine. Miaoyomi registers repositories through Suwayomi's dedicated extension-store API, which
+waits for the index to download and reports errors before refreshing the catalogue. If adding a repository
+fails, check the reported error; changing between these two formats is normally unnecessary.
+
 Adult extensions are hidden until you tap **18+**. Installed ones show **Remove**, and one with a newer
 version shows **Update**.
 

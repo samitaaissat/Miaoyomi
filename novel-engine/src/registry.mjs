@@ -7,7 +7,9 @@ const modules = new Set(['cheerio', 'htmlparser2', 'dayjs', '@libs/fetch', '@lib
 export function capabilityReason(script, entry) {
   for (const match of script.matchAll(/require\(["']([^"']+)["']\)/g)) if (!modules.has(match[1])) return `Unsupported module: ${match[1]}`;
   if (entry.customJS || /\b(?:webStorageUtilized|customJS)\b/.test(script)) return 'Browser storage or custom JavaScript requires an unsupported browser host';
-  const missing = /\b(TextDecoder|TextEncoder|XMLHttpRequest|WebSocket|fetchProto|fetchFile|setTimeout|setInterval)\b/.exec(script);
+  // This conventional fetch header is data, not a browser API dependency.
+  const capabilities = script.replace(/(['"])X-Requested-With\1\s*:\s*(['"])XMLHttpRequest\2/gi, '');
+  const missing = /\b(TextDecoder|TextEncoder|XMLHttpRequest|WebSocket|fetchProto|fetchFile)\b/.exec(capabilities);
   if (missing) return `Unsupported host capability: ${missing[1]}`;
 }
 export class Registry {

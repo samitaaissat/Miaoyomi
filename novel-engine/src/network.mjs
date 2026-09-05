@@ -4,9 +4,11 @@ import https from 'node:https';
 import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib';
 import { isIP } from 'node:net';
 import ipaddr from 'ipaddr.js';
-import { CookieJar } from 'tough-cookie';
+import { Cookie, CookieJar } from 'tough-cookie';
 import { EngineError } from './errors.mjs';
+import { solvePage, solverEndpoint } from './flaresolverr.mjs';
 const policy = message => new EngineError('NETWORK_POLICY', message);
+const isChallenge = result => result.headers['cf-mitigated'] === 'challenge' || /<title>\s*(?:Just a moment|DDoS-Guard)|cf-chl-|challenge-platform/i.test(result.body.subarray(0, 8192).toString('utf8'));
 export function isPublicAddress(value) {
   try { const ip = ipaddr.parse(value); return ip.kind() === 'ipv6' && ip.isIPv4MappedAddress() ? false : ip.range() === 'unicast'; } catch { return false; }
 }
@@ -30,8 +32,9 @@ export async function pinnedTransport(url, init, pin, signal, maxBytes) {
   });
 }
 export class NetworkBroker {
-  constructor({ lookup = host => dns.lookup(host, { all: true, verbatim: true }), transport = pinnedTransport, maxBytes = 5 * 1024 * 1024, timeoutMs = 12_000, allowedOrigins = {} } = {}) {
-    Object.assign(this, { lookup, transport, maxBytes, timeoutMs, allowedOrigins }); this.jars = new Map();
+  constructor({ lookup = host => dns.lookup(host, { all: true, verbatim: true }), transport = pinnedTransport, maxBytes = 5 * 1024 * 1024, timeoutMs = 12_000, allowedOrigins = {}, solverUrl = '', solverFetch = globalThis.fetch, solverTimeoutMs = 60_000, solverConcurrency = 2 } = {}) {
+    Object.assign(this, { lookup, transport, maxBytes, timeoutMs, allowedOrigins, solverFetch, solverTimeoutMs, solverConcurrency });
+    this.solverUrl = solverEndpoint(solverUrl); this.jars = new Map(); this.userAgents = new Map(); this.activeSolves = 0;
   }
   async validate(source, value) {
     let url; try { url = new URL(value); } catch { throw policy('Invalid source URL'); }
@@ -43,8 +46,33 @@ export class NetworkBroker {
     if (!addresses.length || addresses.some(x => !isPublicAddress(x.address))) throw policy('DNS resolved to a non-public address');
     return { url, pin: addresses[0] };
   }
-  async request(source, value, init = {}, parentSignal) {
-    const signal = parentSignal ? AbortSignal.any([parentSignal, AbortSignal.timeout(this.timeoutMs)]) : AbortSignal.timeout(this.timeoutMs);
+  async solve(source, url, init, jar, signal) {
+    if (this.activeSolves >= this.solverConcurrency) throw new EngineError('SOLVER_BUSY', 'Novel FlareSolverr concurrency limit reached; retry shortly');
+    this.activeSolves++;
+    try { return await this.solveNow(source, url, init, jar, signal); }
+    finally { this.activeSolves--; }
+  }
+  async solveNow(source, url, init, jar, signal) {
+    await this.validate(source, url.href);
+    signal.throwIfAborted();
+    const cookies = (await jar.getCookies(url.href)).slice(0, 32).map(cookie => ({ name: cookie.key, value: cookie.value, domain: `${cookie.hostOnly ? '' : '.'}${cookie.domain}`, path: cookie.path, secure: cookie.secure, httpOnly: cookie.httpOnly, ...(cookie.expires instanceof Date ? { expiry: Math.floor(cookie.expires.getTime() / 1000) } : {}) }));
+    const result = await solvePage({ endpoint: this.solverUrl, fetch: this.solverFetch, url: url.href, method: init.method, body: init.body, contentType: init.headers['content-type'], cookies, signal, timeoutMs: this.solverTimeoutMs, maxBytes: this.maxBytes });
+    signal.throwIfAborted();
+    const { url: finalUrl } = await this.validate(source, result.url);
+    for (const cookie of (Array.isArray(result.cookies) ? result.cookies : []).slice(0, 32)) {
+      if (!cookie || typeof cookie.name !== 'string' || typeof cookie.value !== 'string' || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(cookie.name) || /[;\r\n]/.test(cookie.value) || cookie.name.length + cookie.value.length > 4096) continue;
+      const expiry = cookie.expiry ?? cookie.expires;
+      const domain = typeof cookie.domain === 'string' ? cookie.domain : '';
+      const parsed = new Cookie({ key: cookie.name, value: cookie.value, domain: domain ? domain.replace(/^\./, '').toLowerCase() : undefined, hostOnly: !domain.startsWith('.'), path: typeof cookie.path === 'string' ? cookie.path : '/', secure: cookie.secure === true, httpOnly: cookie.httpOnly === true, ...(Number.isFinite(expiry) && expiry >= 0 ? { expires: new Date(expiry * 1000) } : {}) });
+      if (parsed.toString().length <= 4096) await jar.setCookie(parsed, finalUrl.href, { ignoreError: true });
+    }
+    if ((await jar.serialize()).cookies.length > 128) await jar.removeAllCookies();
+    if (typeof result.userAgent === 'string' && result.userAgent.length <= 2048 && !/[\r\n]/.test(result.userAgent)) this.userAgents.set(`${source.id}:${finalUrl.origin}`, result.userAgent);
+    return { status: result.status, headers: result.headers, body: result.body, url: finalUrl.href };
+  }
+  async request(source, value, init = {}, parentSignal, allowSolver = true, redirectLimit = 5) {
+    const totalMs = this.timeoutMs + (allowSolver && this.solverUrl ? this.solverTimeoutMs : 0);
+    const signal = parentSignal ? AbortSignal.any([parentSignal, AbortSignal.timeout(totalMs)]) : AbortSignal.timeout(totalMs);
     let abortListener;
     const work = async () => {
       let current = value;
@@ -54,7 +82,7 @@ export class NetworkBroker {
       if (body !== undefined && (typeof body !== 'string' || Buffer.byteLength(body) > 64 * 1024)) throw policy('Request body must be text of at most 64 KiB');
       if (!this.jars.has(source.id)) this.jars.set(source.id, new CookieJar());
       const jar = this.jars.get(source.id);
-      for (let redirect = 0; redirect <= 5; redirect++) {
+      for (let redirect = 0; redirect <= redirectLimit; redirect++) {
         signal.throwIfAborted();
         const { url, pin } = await this.validate(source, current);
         const headers = { accept: '*/*', 'accept-encoding': 'gzip, deflate, br', 'user-agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36' };
@@ -62,23 +90,46 @@ export class NetworkBroker {
           const name = key.toLowerCase();
           if (['accept', 'accept-language', 'content-type', 'user-agent', 'referer', 'origin', 'x-requested-with'].includes(name) && typeof value === 'string' && value.length <= 2048) headers[name] = value;
         }
+        const userAgent = this.userAgents.get(`${source.id}:${url.origin}`); if (userAgent) headers['user-agent'] = userAgent;
         const cookies = await jar.getCookieString(url.href); if (cookies) headers.cookie = cookies;
-        const result = await this.transport(url, { method, headers, body }, pin, signal, this.maxBytes);
+        const directSignal = AbortSignal.any([signal, AbortSignal.timeout(this.timeoutMs)]);
+        let result;
+        if (allowSolver && init.useWebView === true) result = await this.solve(source, url, { method, headers, body }, jar, signal);
+        else {
+          try { result = await this.transport(url, { method, headers, body }, pin, directSignal, this.maxBytes); }
+          catch (error) { if (directSignal.aborted) throw new EngineError('DEADLINE', 'Source request deadline exceeded', 504); throw error; }
+        }
         if (result.body.length > this.maxBytes) throw new EngineError('RESPONSE_LIMIT', 'Source response exceeds body limit');
         for (const cookie of (Array.isArray(result.headers['set-cookie']) ? result.headers['set-cookie'] : result.headers['set-cookie'] ? [result.headers['set-cookie']] : []).slice(0, 32)) {
           if (cookie.length <= 4096) await jar.setCookie(cookie, url.href, { ignoreError: true });
         }
         if ((await jar.serialize()).cookies.length > 128) await jar.removeAllCookies();
         if ([301, 302, 303, 307, 308].includes(result.status)) {
-          if (!result.headers.location || redirect === 5) throw new EngineError('SOURCE_REDIRECT', 'Invalid or excessive source redirects');
+          if (!result.headers.location || redirect === redirectLimit) throw new EngineError('SOURCE_REDIRECT', 'Invalid or excessive source redirects');
           current = new URL(result.headers.location, url).href;
           if (result.status === 303 || ([301, 302].includes(result.status) && method === 'POST')) { method = 'GET'; body = undefined; }
           continue;
         }
-        const prefix = result.body.subarray(0, 8192).toString('utf8');
-        if (result.headers['cf-mitigated'] === 'challenge' || /<title>\s*Just a moment|cf-chl-|challenge-platform/i.test(prefix)) throw new EngineError('SITE_CHALLENGE', 'Source returned a browser challenge');
+        if (isChallenge(result) && allowSolver && this.solverUrl && init.useWebView !== true) {
+          // Browser DOM is not a raw HTTP response: FlareSolverr currently reports
+          // synthetic status200 and renders JSON inside <pre>. Establish clearance
+          // with a GET, then retry the original guarded request exactly once. A
+          // challenged POST is never also submitted by the browser.
+          const rendered = await this.solve(source, url, { method: 'GET', headers }, jar, signal);
+          if (isChallenge(rendered)) throw new EngineError('SITE_CHALLENGE', 'Source returned a browser challenge');
+          if (rendered.status < 200 || rendered.status >= 300) throw new EngineError('SOURCE_HTTP', `Source returned HTTP ${rendered.status}`);
+          try { return await this.request(source, url.href, { ...init, method, body, useWebView: false }, signal, false, redirectLimit - redirect); }
+          catch (error) {
+            // Only a caller explicitly asking for an HTML document can use a
+            // rendered fallback, and only if HTTP still encounters a challenge.
+            // Real HTTP errors and JSON/AJAX responses must remain observable.
+            if (error.code === 'SITE_CHALLENGE' && method === 'GET' && /\btext\/html\b/i.test(headers.accept) && !/json/i.test(headers.accept) && !headers['x-requested-with'] && !/<pre\b/i.test(rendered.body.toString('utf8'))) return rendered;
+            throw error;
+          }
+        }
+        if (isChallenge(result)) throw new EngineError('SITE_CHALLENGE', 'Source returned a browser challenge');
         if (result.status < 200 || result.status >= 300) throw new EngineError('SOURCE_HTTP', `Source returned HTTP ${result.status}`);
-        return { ...result, url: url.href };
+        return { ...result, url: result.url || url.href };
       }
     };
     try {
@@ -95,7 +146,7 @@ export class NetworkBroker {
     return { ...result, body, headers: Object.fromEntries(Object.entries(result.headers).filter(([key]) => key !== 'set-cookie').map(([key, value]) => [key, Array.isArray(value) ? value.join(', ') : value])) };
   }
   async fetchAsset(source, value, signal, init = {}) {
-    const result = await this.request(source, value, init, signal);
+    const result = await this.request(source, value, init, signal, false);
     const type = (result.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
     const b = result.body;
     const matches = type === 'image/png' ? b.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) : type === 'image/jpeg' ? b[0] === 255 && b[1] === 216 && b[2] === 255 : type === 'image/gif' ? /^GIF8[79]a/.test(b.subarray(0,6).toString()) : type === 'image/webp' ? b.subarray(0,4).toString() === 'RIFF' && b.subarray(8,12).toString() === 'WEBP' : false;

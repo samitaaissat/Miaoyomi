@@ -63,3 +63,34 @@ test('published image request metadata survives restart and reaches the guarded 
   // Request metadata is an internal transport capability, not public source credentials.
   assert.equal((await app.inject({url:'/v1/sources',headers:{authorization:'Bearer test'}})).json().sources.find(s=>s.id==='ixdzs8').imageRequestInit,undefined);
 });
+test('timer-dependent plugin uses browser fetch and raw JSON recovery through the authenticated worker service', async t => {
+  const { NetworkBroker } = await import('../src/network.mjs');
+  const site = 'https://fiction.example/';
+  const entry = { source: { id: 'solver-fixture', site, enabled: true, supported: true }, script: `
+    const { fetchApi, fetchWebView } = require('@libs/fetch');
+    exports.default = { async parseNovel() {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      const rendered = await fetchWebView('${site}browser');
+      const response = await fetchApi('${site}api');
+      return { name: (await response.json()).title, rendered, contentType: response.headers.get('content-type') };
+    } };
+  ` };
+  let directAttempts = 0; const solvedPaths = [];
+  const broker = new NetworkBroker({ lookup: async () => [{ address: '93.184.216.34', family: 4 }], solverUrl: 'http://solver:8191', transport: async (url, init, pin) => {
+    assert.equal(url.href, site + 'api'); assert.equal(pin.address, '93.184.216.34');
+    if (++directAttempts === 1) return { status: 403, headers: { 'cf-mitigated': 'challenge' }, body: Buffer.from('<title>Just a moment...</title>') };
+    assert.equal(init.headers.cookie, 'cf_clearance=guest');
+    assert.equal(init.headers['user-agent'], 'SolverBrowser/1');
+    return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from('{"title":"Recovered JSON title"}') };
+  }, solverFetch: async (_endpoint, init) => {
+    const payload = JSON.parse(init.body); assert.equal(payload.cmd, 'request.get');
+    solvedPaths.push(new URL(payload.url).pathname);
+    return Response.json({ status: 'ok', solution: { url: payload.url, status: 200, headers: {}, userAgent: 'SolverBrowser/1', response: payload.url.endsWith('/browser') ? '<html><body>Rendered chapter</body></html>' : '<html><body><pre>{"title":"Recovered JSON title"}</pre></body></html>', cookies: [{ name: 'cf_clearance', value: 'guest', domain: 'fiction.example', path: '/', secure: true }] } });
+  } });
+  const app = await createApp({ token: 'test', broker, registry: { active: id => { assert.equal(id, 'solver-fixture'); return entry; } } });
+  t.after(() => app.close());
+  const result = await app.inject({ method: 'POST', url: '/v1/invoke', headers: { authorization: 'Bearer test' }, payload: { sourceId: 'solver-fixture', method: 'parseNovel', args: ['fixture'] } });
+  assert.equal(result.statusCode, 200, result.body);
+  assert.deepEqual(result.json().result, { name: 'Recovered JSON title', rendered: '<html><body>Rendered chapter</body></html>', contentType: 'application/json' });
+  assert.equal(directAttempts, 2); assert.deepEqual(solvedPaths, ['/browser', '/api']);
+});

@@ -147,6 +147,7 @@ set_solver() {
   FLARESOLVERR_URL=$url
   FLARESOLVERR_CTID=$ctid
   set_environment_key "$ETC_DIR/app.env" FLARESOLVERR_URL "$url"
+  set_environment_key "$ETC_DIR/novel.env" FLARESOLVERR_URL "$url"
   write_solver_environment
   set_environment_key "$ETC_DIR/install.conf" FLARESOLVERR_URL "$url"
   set_environment_key "$ETC_DIR/install.conf" FLARESOLVERR_CTID "$ctid"
@@ -415,6 +416,7 @@ update_native() {
   perform_backup
   PHASE=cutover
   select_release "$NEW_RELEASE" "$APP_DIR/current"
+  set_environment_key "$ETC_DIR/novel.env" FLARESOLVERR_URL "$FLARESOLVERR_URL"
   start_writers
   write_install_config
   install_staged_manager
@@ -553,6 +555,7 @@ write_application_environment() {
     write_env_line PORT 4100
     write_env_line NOVEL_ENGINE_TOKEN "$token"
     write_env_line NOVEL_ENGINE_STATE_DIR "$STATE_DIR/novel-engine"
+    write_env_line FLARESOLVERR_URL "$FLARESOLVERR_URL"
   } > "$ETC_DIR/novel.env"
   chown root:miaoyomi "$ETC_DIR/app.env"
   chown root:miaoyomi-novel "$ETC_DIR/novel.env"

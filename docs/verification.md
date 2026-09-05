@@ -1,5 +1,17 @@
 # Verification record
 
+## Novel discovery and runtime follow-up (2026-09-05)
+
+Novel discovery now combines enabled, compatible, account-visible sources by default; source checkboxes live in Filters. Browse/search preserve source identity, each source's filters and pagination, partial successes, and failed or unstarted source pages in continuation cursors. Scheduling uses two workers and yields remaining sources to subsequent pages after ten seconds of scheduling work. Newly discovered cards resolve source metadata before opening a saved-title route.
+
+The focused PostgreSQL novel archive/API/discovery/progress suites plus API documentation and route wiring checks pass **56 tests, zero failures or skips**. The BFF TypeScript build passes. Regressions cover language/source/latest scope, retrieval/age permissions, source-specific defaults, source metadata failure isolation, failed-page retry, exhaustion and fair continuation after slow sources.
+
+The web production static export and **95 unit tests** pass. The expanded Chrome fixture passes aggregation, source attribution, Filters-only multi-selection, language intersection, browse/search cursors, duplicate removal, partial/all-source failures, failed-page retry, and opening an unsaved discovery card carrying a deterministic ID. The same run completes chapter reading, export, device download, cold offline reload and account isolation. Desktop and mobile discovery screenshots were visually inspected under `.superpowers/sdd/2026-09-05-miaoyomi/`.
+
+The engine build and **54 tests** pass. Timers now retain guest callbacks with real delays, cancellation, deadline enforcement and cleanup. The registry admits timer-dependent plugins and no longer mistakes the conventional AJAX request header for browser XMLHttpRequest usage. Configured FlareSolverr supplies clearance before one guarded retry, preserving raw JSON, HTTP status and POST bodies; explicit browser calls remain supported. Tests cover actual pinned plugins, realistic solver DOM envelopes, HTTP errors, replay prevention, cookie isolation, DNS and redirect validation, response/concurrency/time limits, and the authenticated timer → worker → broker → solver path.
+
+The native installer/manager and Proxmox behavior suites pass **69 tests**. Compose configuration with the solver profile and development overlay, both Compose manifest tests, shell syntax and diff checks pass. Native install/update/reconnect and Compose now supply the solver URL to the novel engine. An upgrade executed by the older installed manager needs one subsequent `miaoyomi set-solver --url <solver-origin>` or host `--reconnect`; see the deployment guide. This follow-up used deterministic solver protocol fixtures and did not establish live Cloudflare challenge success or deploy the changes to a Proxmox guest.
+
 This downstream is based on Uchiyomi commit `7407f4dab416724c65839b0e2e6a9f8ddfe45e55`. The approved design and comparison were written after reading all 16 visible messages in the supplied transcript. Fastify, account authentication, one PWA and the existing reverse-proxy/LXC topology were retained.
 
 ## Application and formats

@@ -12,6 +12,8 @@ npm ci
 npm run build
 export NOVEL_ENGINE_TOKEN='replace-with-a-long-random-shared-token'
 export NOVEL_ENGINE_STATE_DIR='./state'
+# Optional shared browser solver for challenged sources:
+export FLARESOLVERR_URL='http://127.0.0.1:8191'
 npm start
 ```
 
@@ -40,19 +42,30 @@ Every endpoint except `GET /healthz` requires `Authorization: Bearer <token>`. A
 
 Allowed methods: `popularNovels`, `searchNovels`, `parseNovel`, `parsePage`, `parseChapter`, `resolveUrl`. Missing optional plugin methods return 409. LNReader method argument order is preserved. Browse takes `[page,{showLatestNovels,filters}]`, search takes `[term,page]`, detail/chapter take `[path]`, and `parsePage` takes `[path,pageString]`. Browse merges supplied filter wrappers with plugin defaults. Filters retain `{type,value}`; they are not flattened.
 
-Failures use `{error,message}`: 400 invalid call, 401 invalid token, 404 unknown source, 409 disabled/unsupported capability, 502 source/network/challenge/busy errors, 504 deadline. `SITE_CHALLENGE` and `SOURCE_INTERSTITIAL` distinguish browser challenge/consent/login pages. HTTP failure cannot become a successful empty scrape even if a plugin catches fetch exceptions.
+Failures use `{error,message}`: 400 invalid call, 401 invalid token, 404 unknown source, 409 disabled/unsupported capability, 502 source/network/challenge/busy errors, 504 deadline. `SITE_CHALLENGE` and `SOURCE_INTERSTITIAL` distinguish unsolved browser challenge/consent/login pages. `SOLVER_UNAVAILABLE`, `SOLVER_UNSUPPORTED` and `SOLVER_BUSY` identify solver failures, unsupported request methods/media types and capacity limits. HTTP failure cannot become a successful empty scrape even if a plugin catches fetch exceptions.
 
 ## Network and execution limits
 
-- Only HTTP(S), standard ports and approved **exact origins** are accepted. All DNS answers must be public unicast; IPv4-mapped IPv6 is rejected. Each request connects to its validated DNS address, while preserving hostname/TLS verification. Every redirect revalidates origin and DNS.
-- Five redirects, 12-second network deadline, 5 MiB decoded response, 64 KiB text request body, 32 fetches per invocation; hop-by-hop, host, authorization and user-supplied cookie headers are not forwarded.
+- Only HTTP(S), standard ports and approved **exact origins** are accepted. All DNS answers must be public unicast; IPv4-mapped IPv6 is rejected. Direct requests connect to their validated DNS address, while preserving hostname/TLS verification. Every direct redirect revalidates origin and DNS. Solver requests validate the initial and returned final URL; see the browser trust boundary below.
+- Five direct redirects shared with any recovery retry, 12-second direct network deadline, 5 MiB decoded response, 64 KiB text request body, 32 fetches per invocation; hop-by-hop, host, authorization and user-supplied cookie headers are not forwarded. Solver calls have a 50-second solve budget inside a 60-second HTTP limit, allowing time for browser startup/cleanup, a bounded JSON envelope and the same decoded page limit. The complete request including recovery is capped at 72 seconds.
 - Cookies are in-memory, source-scoped public-guest jars with domain/path/secure matching; no account login API. Cookie count and size are bounded. Redirect cookies are retained.
-- QuickJS: 64 MiB heap, 1 MiB stack, 20-second wall-clock limit. Worker: 128 MiB V8 heap and a host hard kill deadline. Two concurrent operations by default (`NOVEL_ENGINE_CONCURRENCY`); no unbounded queue. One invocation per source protects its transient KV snapshot.
+- QuickJS: 64 MiB heap, 1 MiB stack, 20-second wall-clock limit (80 seconds when a solver is configured). Worker: 128 MiB V8 heap and a host hard kill deadline. Two concurrent operations by default (`NOVEL_ENGINE_CONCURRENCY`); no unbounded queue. Novel solver work is separately limited to two simultaneous requests. One invocation per source protects its transient KV snapshot.
+- `setTimeout`, `setInterval` and their clear functions use bounded host scheduling with callback arguments, real elapsed delays and at most 1024 active timers. Timers are discarded when the invocation completes or reaches its deadline; they cannot outlive the worker.
 - Plugin KV storage is source-scoped, in-memory only, limited to 256 KiB with a 15-minute reuse TTL. It is never written to configuration storage. A new isolate is created for each call, so other arbitrary plugin instance state does not survive calls.
 - Plugin output: at most 8 MiB. Assets accept PNG, JPEG, GIF or WebP only when their signature matches the reported MIME type; AVIF, SVG and HTML are rejected. This matches the BFF archive path, which converts WebP to portable PNG inside the EPUB.
 - Published `imageRequestInit` defaults (such as an image Referrer header) are loaded privately from the plugin and applied through the same request/header allowlist. They cannot override the destination host, provide Authorization or inject cookies; source-scoped cookie matching remains the broker's responsibility.
 
 Source-site origins are allowed by default. The server adds Royal Road's reviewed cover CDN origins `https://www.royalroadcdn.com` and `https://royalroadcdn.com`. `NOVEL_ENGINE_ALLOWED_ORIGINS` may supply an administrator-reviewed JSON map of source IDs to additional exact origins; setting it replaces that default map. This never relaxes public-IP checks. A plugin needing an unapproved API/CDN produces an explicit `NETWORK_POLICY` failure.
+
+## FlareSolverr
+
+Set `FLARESOLVERR_URL` to a trusted HTTP(S) solver origin; unset or empty disables it. Ordinary text requests use direct HTTP first. On a detected Cloudflare/DDoS-Guard challenge, the engine asks FlareSolverr to GET the URL for clearance, then retries the original guarded request once with matching cookies and the solver user agent. This preserves the actual response status, content type and JSON body. POST recovery preserves the original body and headers without also submitting a browser POST. A successful direct request is never replayed.
+
+Explicit `fetchWebView` or `useWebView: true` requests return rendered UTF-8 HTML from the solver immediately. This browser path supports GET and URL-encoded form POST; HEAD, JSON POST and multipart POST fail explicitly. FlareSolverr does not support arbitrary request headers and its DOM response has no reliable origin HTTP status. Automatic recovery only permits rendered fallback for an explicit `Accept: text/html` GET whose guarded retry is still challenged, excluding AJAX/JSON requests and browser `<pre>` documents. Real HTTP errors from the retry remain failures. Binary assets stay on the pinned direct transport with matching guest cookies and user agent.
+
+The solver is a **trusted network boundary**: its browser resolves DNS and follows redirects and subresources internally. Initial/final URL checks cannot police those intermediate connections or pin the browser's DNS. Run the solver in an isolated network with suitable outbound restrictions if your threat model requires the direct broker's egress guarantees. The engine never exposes its token, environment or filesystem to the solver or plugin.
+
+Native installation writes the shared solver URL into `novel.env`; `miaoyomi set-solver` updates all three consumers and restarts their services. With Compose, set `FLARESOLVERR_URL=http://solver:8191` and enable `--profile solver`, or use a reachable external endpoint. The bundled solver joins both the manga and novel networks.
 
 ## Compatibility and provenance
 
@@ -60,9 +73,9 @@ The vendored registry contains 278 scripts from official LNReader published comm
 
 The common module map supplies `cheerio`, `htmlparser2`, `dayjs`, `@libs/fetch`, `@libs/storage`, `@libs/novelStatus`, `@libs/defaultCover`, `@libs/filterInputs`, `@libs/isAbsoluteUrl` and `@/types/constants`. The default-cover placeholder is empty so clients can display their own placeholder. Guest URL/URLSearchParams, text FormData, Headers, base64, promises and ordinary ECMAScript intrinsics are available. Response objects support `text`, `json`, `clone`, status, URL and headers.
 
-249 sources pass the initial static host-capability scan. This is **not** a live-site availability claim. Unsupported modules (`@libs/aes`), browser storage/custom JavaScript, timers, browser networking, text codecs and protobuf/file fetch helpers are shown explicitly. Binary FormData, Blob and binary guest responses also fail explicitly if invoked. Additional runtime evaluation errors remain visible on the source. There is no challenge bypass, member login or unrestricted Node fallback.
+270 sources pass the initial static host-capability scan. This is **not** a live-site availability claim. Unsupported modules (`@libs/aes`), browser storage/custom JavaScript, browser networking, text codecs and protobuf/file fetch helpers are shown explicitly. Binary FormData, Blob and binary guest responses also fail explicitly if invoked. Additional runtime evaluation errors remain visible on the source. Configured FlareSolverr can handle supported browser challenges; member login and unrestricted Node access remain unavailable.
 
-Royal Road's normal public browse/detail/chapter flow is verified. AO3 public guest-readable works are verified; works behind adult-consent or login pages fail explicitly. The pinned AO3 plugin declares a ratings filter but does not use it in its browse request; the live smoke therefore selects the first readable result, recording skipped consent pages. ScribbleHub currently returns a Cloudflare challenge.
+Royal Road's normal public browse/detail/chapter flow and AO3 public guest-readable works were verified in the initial live check; works behind adult-consent or login pages fail explicitly. The pinned AO3 plugin declares a ratings filter but does not use it in its browse request; the live smoke therefore selects the first readable result, recording skipped consent pages. ScribbleHub returned a Cloudflare challenge on that direct-only check. Solver integration is covered by deterministic tests; live challenge success depends on the current site and solver browser.
 
 ## Verify
 
@@ -73,4 +86,4 @@ npm run test:live # opt-in actual websites: Royal Road, AO3, ScribbleHub
 npm run test:live -- royalroad archiveofourown
 ```
 
-Fixture tests execute the actual pinned published scripts with hand-authored HTML and independently asserted novel/chapter IDs. Live tests are intentionally separate; remote availability, consent requirements and anti-bot responses can change. The smoke treats ScribbleHub's known typed challenge as a recorded block; unexpected source failures fail the command.
+Fixture tests execute the actual pinned published scripts with hand-authored HTML and independently asserted novel/chapter IDs. Live tests are intentionally separate; remote availability, consent requirements and anti-bot responses can change. The smoke reads `FLARESOLVERR_URL` and treats unsolved challenges as failures when it is configured. Without a solver, ScribbleHub's known typed challenge is a recorded block; unexpected source failures fail the command.

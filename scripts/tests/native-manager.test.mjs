@@ -182,7 +182,7 @@ test('failure to stop a writer prevents creating an inconsistent backup', t => {
   assert.ok(existsSync(join(f.root, 'services/miaoyomi')));
 });
 
-test('external FlareSolverr is wired into both app and Suwayomi without a local solver service', t => {
+test('external FlareSolverr is wired into app, novels and Suwayomi without a local solver service', t => {
   const f = fixture(t);
   f.put('etc/install.conf', readFileSync(join(f.root, 'etc/install.conf'), 'utf8') + 'FLARESOLVERR_URL=http://192.0.2.20:8191\nFLARESOLVERR_CTID=120\n');
   const result = f.run(['--help'], {}, `
@@ -194,6 +194,7 @@ write_services
   assert.equal(result.status, 0, result.stderr);
   const app = readFileSync(join(f.root, 'etc/app.env'), 'utf8');
   assert.match(app, /^FLARESOLVERR_URL=http:\/\/192\.0\.2\.20:8191$/m);
+  assert.match(readFileSync(join(f.root, 'etc/novel.env'), 'utf8'), /^FLARESOLVERR_URL=http:\/\/192\.0\.2\.20:8191$/m);
   const solver = readFileSync(join(f.root, 'etc/suwayomi-solver.env'), 'utf8');
   assert.match(solver, /server\.flareSolverrEnabled=true/);
   assert.match(solver, /server\.flareSolverrUrl=http:\/\/192\.0\.2\.20:8191/);
@@ -222,7 +223,7 @@ test('solver outage does not prevent local restart and is reported separately by
   assert.match(logs.stderr, /120/);
 });
 
-test('set-solver backs up and updates both consumers while preserving secrets and custom settings', t => {
+test('set-solver backs up and updates all consumers while preserving secrets and custom settings', t => {
   const f = fixture(t);
   f.put('etc/database.env', 'POSTGRES_PASSWORD=keep-database-secret\n');
   f.put('etc/suwayomi-solver.env', '# operator comment\nEXTRA_ENGINE_SETTING=keep\n');
@@ -234,16 +235,21 @@ test('set-solver backs up and updates both consumers while preserving secrets an
   assert.match(app, /^JWT_SECRET=keep-this-secret$/m);
   assert.match(app, /^PUBLIC_ORIGIN=https:\/\/custom\.example\.com$/m);
   assert.match(app, /^FLARESOLVERR_URL=https:\/\/solver\.example\.com:8191$/m);
-  assert.equal(readFileSync(join(f.root, 'etc/novel.env'), 'utf8'), 'NOVEL_ENGINE_TOKEN=keep-this-token\n');
+  const novel = readFileSync(join(f.root, 'etc/novel.env'), 'utf8');
+  assert.match(novel, /^NOVEL_ENGINE_TOKEN=keep-this-token$/m);
+  assert.match(novel, /^FLARESOLVERR_URL=https:\/\/solver\.example\.com:8191$/m);
   assert.equal(readFileSync(join(f.root, 'etc/database.env'), 'utf8'), 'POSTGRES_PASSWORD=keep-database-secret\n');
   assert.match(readFileSync(join(f.root, 'etc/suwayomi-solver.env'), 'utf8'), /EXTRA_ENGINE_SETTING=keep/);
   assert.equal(readFileSync(join(f.root, 'state/suwayomi/server.conf'), 'utf8'), 'server { customSetting = true }\n');
   assert.match(readFileSync(join(f.root, 'etc/install.conf'), 'utf8'), /^FLARESOLVERR_CTID=120$/m);
   assert.ok(f.events().indexOf('curl:') < f.events().indexOf('service:miaoyomi:stop'));
+  assert.match(f.events(), /service:miaoyomi-novel:stop/);
+  assert.match(f.events(), /service:miaoyomi-novel:start/);
   assert.doesNotMatch(f.events(), /service:.*(?:solver|flaresolverr)/);
   const update = f.run(['update', '--source-dir', f.source], { FAIL_SOLVER: '1' });
   assert.equal(update.status, 0, update.stderr);
   assert.equal(readFileSync(join(f.root, 'etc/app.env'), 'utf8'), app);
+  assert.equal(readFileSync(join(f.root, 'etc/novel.env'), 'utf8'), novel);
   assert.match(readFileSync(join(f.root, 'etc/install.conf'), 'utf8'), /^FLARESOLVERR_URL=https:\/\/solver\.example\.com:8191$/m);
 });
 
@@ -251,13 +257,27 @@ test('set-solver can disable remote integration without probing or touching the 
   const f = fixture(t);
   f.put('etc/install.conf', readFileSync(join(f.root, 'etc/install.conf'), 'utf8') + 'FLARESOLVERR_URL=http://solver.example.com:8191\nFLARESOLVERR_CTID=120\n');
   f.put('etc/app.env', 'JWT_SECRET=keep-this-secret\nFLARESOLVERR_URL=http://solver.example.com:8191\n');
+  f.put('etc/novel.env', 'NOVEL_ENGINE_TOKEN=keep-this-token\nFLARESOLVERR_URL=http://solver.example.com:8191\n');
   const result = f.run(['set-solver', '--url', ''], { FAIL_SOLVER: '1' });
   assert.equal(result.status, 0, result.stderr);
   const inspect = f.run(['--help'], {}, 'source "$ETC_DIR/app.env"; printf "solver=<%s>\n" "$FLARESOLVERR_URL"');
   assert.equal(inspect.status, 0, inspect.stderr);
   assert.match(inspect.stdout, /solver=<>/);
+  const novel = f.run(['--help'], {}, 'source "$ETC_DIR/novel.env"; printf "solver=<%s>\n" "$FLARESOLVERR_URL"');
+  assert.equal(novel.status, 0, novel.stderr);
+  assert.match(novel.stdout, /solver=<>/);
   assert.match(readFileSync(join(f.root, 'etc/suwayomi-solver.env'), 'utf8'), /server\.flareSolverrEnabled=false/);
   assert.doesNotMatch(f.events(), /curl:.*solver\.example\.com|service:.*(?:solver|flaresolverr)/);
+});
+
+test('native update migrates existing novel solver configuration without regenerating its token', t => {
+  const f = fixture(t);
+  f.put('etc/install.conf', readFileSync(join(f.root, 'etc/install.conf'), 'utf8') + 'FLARESOLVERR_URL=http://192.0.2.20:8191\n');
+  const result = f.run(['update', '--source-dir', f.source]);
+  assert.equal(result.status, 0, result.stderr);
+  const novel = readFileSync(join(f.root, 'etc/novel.env'), 'utf8');
+  assert.match(novel, /^NOVEL_ENGINE_TOKEN=keep-this-token$/m);
+  assert.match(novel, /^FLARESOLVERR_URL=http:\/\/192\.0\.2\.20:8191$/m);
 });
 
 for (const env of [{ FAIL_SOLVER: '1' }, { WRONG_SOLVER: '1' }]) {
