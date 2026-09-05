@@ -10,7 +10,9 @@
 // v8: this worker leaked an IndexedDB connection, which blocked the page's v1 to v2 upgrade of the offline
 // store and hung the reader on "Loading chapter...". The old worker has to be replaced for that to stop, so
 // the bump is load-bearing here rather than cosmetic.
-const VERSION = 'v8';
+// v9 stores each navigation under its actual URL so a downloaded novel reader can cold-reload offline.
+// Novel API responses stay out of Cache Storage entirely; their account-scoped offline copy lives in IDB.
+const VERSION = 'v10';
 const SHELL = `yomi-shell-${VERSION}`;
 const STATIC = `yomi-static-${VERSION}`;
 const IMG = `yomi-img-${VERSION}`;
@@ -52,7 +54,31 @@ let ownerHint = null;
 self.addEventListener('message', (e) => {
   if (e.data?.type === 'yomi-signout') { ownerHint = null; e.waitUntil(clearAccountCaches()); }
   if (e.data?.type === 'yomi-user') ownerHint = e.data.userId || null;
+  if (e.data?.type === 'miaoyomi-prime-novel') e.waitUntil(
+    primeNovelNavigations(e.data.urls).then((ok) => e.ports?.[0]?.postMessage({ ok }))
+      .catch(() => e.ports?.[0]?.postMessage({ ok: false })),
+  );
 });
+
+/** Save Offline can follow a client-side transition, which gives the worker no navigation request to cache.
+ * Fetch and store the exact query-routed reader URL at save time so closing the PWA immediately still leaves
+ * a cold-launch shell. Only same-origin novel routes are accepted from the page message. */
+async function primeNovelNavigations(values) {
+  const urls = Array.isArray(values) ? values.slice(0, 4) : [];
+  const cache = await caches.open(SHELL);
+  const results = await Promise.all(urls.map(async (value) => {
+    try {
+      const url = new URL(value, location.origin);
+      if (url.origin !== location.origin || !url.pathname.startsWith('/novels/')) return false;
+      if (await cache.match(url.href)) return true;
+      const response = await fetch(url.href, { credentials: 'include' });
+      if (!response.ok) return false;
+      await cache.put(url.href, response.clone());
+      return true;
+    } catch (_) { return false; }
+  }));
+  return results.length > 0 && results.every(Boolean);
+}
 
 self.addEventListener('activate', (e) => {
   e.waitUntil(
@@ -134,11 +160,12 @@ self.addEventListener('fetch', (e) => {
         try {
           const res = await fetch(req);
           const c = await caches.open(SHELL);
-          c.put('/', res.clone());
+          c.put(req, res.clone());
+          if (url.pathname === '/') c.put('/', res.clone());
           return res;
         } catch {
           const c = await caches.open(SHELL);
-          return (await c.match('/')) || (await c.match(req)) || Response.error();
+          return (await c.match(req)) || (await c.match('/')) || Response.error();
         }
       })(),
     );
@@ -165,7 +192,7 @@ self.addEventListener('fetch', (e) => {
     // per-account (an age-limited account is served a filtered source list, and an account that may not
     // download is refused outright), so a stored copy is one account's answer waiting to be replayed to the
     // next person on a shared household device. VERSION went to v6 to drop copies stored before this.
-    if (url.pathname.startsWith('/api/sources')) {
+    if (url.pathname.startsWith('/api/sources') || url.pathname.startsWith('/api/novels')) {
       e.respondWith(fetch(req));
       return;
     }

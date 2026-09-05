@@ -30,9 +30,14 @@ import personalRoutes from './routes/personal';
 import downloadRoutes from './routes/downloads';
 import sourceRoutes from './routes/sources';
 import opdsRoutes from './routes/opds';
+import novelRoutes from './routes/novels';
+import { migrateNovels } from './lib/novels/migrate';
+import { migrateMangaImmediate } from './lib/mangaImmediateMigrate';
 
 async function main() {
   await migrate();
+  await migrateNovels();
+  await migrateMangaImmediate();
   const bi = loadBuiltins(); // always-on built-ins bundled in the core (MangaDex)
   const ls = loadSources(); // bespoke source plugins from SOURCES_DIR (the optional pack)
   const cs = loadCustomSites(); // user-added engine sites from /config/sites.json (built via the in-core engines)
@@ -127,6 +132,7 @@ async function main() {
   await app.register(downloadRoutes);
   await app.register(sourceRoutes);
   await app.register(opdsRoutes);
+  await app.register(novelRoutes);
   // The interactive API reference, BEFORE the web root: registerWebRoot installs the not-found handler that
   // serves the app shell for any unknown path, and a route added after it would still work, but its
   // static assets under /api/docs/ would not be found by the UI in the same way. Unauthenticated on

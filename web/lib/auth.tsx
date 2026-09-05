@@ -1,6 +1,6 @@
 'use client';
 import { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
-import { api, refreshSession, setAccessToken, setCurrentUser } from './api';
+import { api, didRefreshFailOnNetwork, refreshSession, setAccessToken, setCurrentUser } from './api';
 import { deviceId, deviceName } from './device';
 import { clearShownOnce } from './shownOnce';
 
@@ -14,6 +14,21 @@ interface User {
   perms?: Record<string, boolean>;
   avatar?: Avatar;
   settings: Record<string, any>;
+}
+const OFFLINE_ACCOUNT_KEY = 'yomi-offline-account';
+
+function rememberOfflineAccount(user: User | null) {
+  try {
+    if (user) localStorage.setItem(OFFLINE_ACCOUNT_KEY, JSON.stringify(user));
+    else localStorage.removeItem(OFFLINE_ACCOUNT_KEY);
+  } catch { /* private browsing can refuse storage; online auth still works */ }
+}
+
+function offlineAccount(): User | null {
+  try {
+    const value = JSON.parse(localStorage.getItem(OFFLINE_ACCOUNT_KEY) || 'null');
+    return value && typeof value.id === 'string' && typeof value.displayName === 'string' ? value as User : null;
+  } catch { return null; }
 }
 type Status = 'loading' | 'authed' | 'anon';
 
@@ -108,6 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setCurrentUser(me.id);
           void tellWorkerUser(me.id);
           setUser(me);
+          rememberOfflineAccount(me);
           applyAccent(me.settings);
           setStatus('authed');
         } catch {
@@ -115,8 +131,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setStatus('anon');
         }
       } else {
-        setCurrentUser(null);
-        setStatus('anon');
+        // A downloaded chapter must survive closing and reopening an installed PWA while the server is
+        // unreachable. Reuse only the last successfully authenticated account, and only while the browser
+        // itself reports offline; an online 401 remains a real sign-out rather than a stale local session.
+        const remembered = didRefreshFailOnNetwork() ? offlineAccount() : null;
+        if (remembered) {
+          setCurrentUser(remembered.id);
+          void tellWorkerUser(remembered.id);
+          setUser(remembered);
+          applyAccent(remembered.settings);
+          setStatus('authed');
+        } else {
+          setCurrentUser(null);
+          setStatus('anon');
+        }
       }
     })();
     // keep the access token warm
@@ -137,6 +165,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setCurrentUser(res.user.id);
       void tellWorkerUser(res.user.id);
       setUser(res.user);
+      rememberOfflineAccount(res.user);
       applyAccent(res.user.settings);
       setStatus('authed');
       return { ok: true };
@@ -163,6 +192,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setCurrentUser(res.user.id);
       void tellWorkerUser(res.user.id);
       setUser(res.user);
+      rememberOfflineAccount(res.user);
       applyAccent(res.user.settings);
       setStatus('authed');
       return { ok: true };
@@ -180,6 +210,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAccessToken(null);
     setCurrentUser(null);
     setUser(null);
+    rememberOfflineAccount(null);
     setStatus('anon');
     // Secrets the server only ever sends once are held outside React so a remount cannot destroy them.
     // That store has to end with the session, or a shared machine hands the next person a live token.

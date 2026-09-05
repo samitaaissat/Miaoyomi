@@ -168,10 +168,10 @@ export function makeSuwayomiAdapter(remote: RemoteSource, run: Gql = defaultGql)
       const d = await run<{ fetchChapters: { chapters: RemoteChapter[] } }>(FETCH_CHAPTERS, { mangaId: Number(seriesId) });
       const list = d?.fetchChapters?.chapters;
       if (!Array.isArray(list)) return [];
-      const seen = new Set<number>();
+      const seen = new Set<string>();
       return list
         .map(toChapter)
-        .filter((c): c is SourceChapter => !!c && (seen.has(c.number) ? false : (seen.add(c.number), true)))
+        .filter((c): c is SourceChapter => !!c && (seen.has(c.sourceId) ? false : (seen.add(c.sourceId), true)))
         .sort((a, b) => a.number - b.number);
     },
 

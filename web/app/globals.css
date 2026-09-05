@@ -219,3 +219,23 @@ html.lenis, html.lenis body { height: auto; }
 [dir='rtl'] .scrim-soft {
   background-image: linear-gradient(to left, rgb(0 0 0 / 0.65), rgb(0 0 0 / 0.20) 45%, transparent 72%);
 }
+
+/* Prose reader typography. Source class/style attributes are stripped before insertion, so these rules
+   apply only to semantic elements and no plugin CSS can cross into the application shell. */
+.novel-prose { font-family: Georgia, 'Times New Roman', serif; overflow-wrap: anywhere; }
+.novel-prose p { margin: 0 0 1.15em; }
+.novel-prose h1, .novel-prose h2, .novel-prose h3, .novel-prose h4 {
+  margin: 1.8em 0 .7em; font-family: var(--font-display), system-ui, sans-serif; font-weight: 700; line-height: 1.25;
+}
+.novel-prose h1 { font-size: 1.65em; }
+.novel-prose h2 { font-size: 1.4em; }
+.novel-prose h3 { font-size: 1.2em; }
+.novel-prose blockquote { margin: 1.5em 0; padding-inline-start: 1.1em; border-inline-start: 3px solid rgb(var(--accent) / .55); opacity: .86; }
+.novel-prose hr { margin: 2.5em auto; width: 35%; border: 0; border-top: 1px solid currentColor; opacity: .25; }
+.novel-prose img { display: block; max-width: 100%; height: auto; margin: 1.5em auto; border-radius: .75rem; }
+.novel-prose a { color: rgb(var(--accent)); text-decoration: underline; text-underline-offset: .18em; }
+.novel-prose ul, .novel-prose ol { margin: 1em 0; padding-inline-start: 1.5em; }
+.novel-prose ul { list-style: disc; }
+.novel-prose ol { list-style: decimal; }
+.novel-prose table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.novel-prose th, .novel-prose td { border: 1px solid currentColor; padding: .4em .6em; }

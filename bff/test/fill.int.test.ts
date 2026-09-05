@@ -23,6 +23,8 @@ if (DSN) {
   process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-at-least-16-chars';
   process.env.CONFIG_DIR = process.env.CONFIG_DIR || '/tmp/uchiyomi-test-config';
   process.env.LIBRARY_BACKEND = 'owned';
+  // Never let a fixture scan the host default /library (which is /Library on macOS).
+  process.env.LIBRARY_ROOT = join(root, '_existing-library');
   process.env.DL_ROOT = root;
   process.env.DOWNLOAD_MIN_GAP_MS = '0';
   process.env.SCAN_CONCURRENCY = '4'; // the scan-latency test below assumes four slots and
@@ -171,16 +173,22 @@ test('THE METADATA HAZARD: a fill must not rename the series', { skip }, async (
     payload: { planId: j.planId, source: RICH, sourceSeriesId: rich.sourceSeriesId, numbers: [9] },
   });
   assert.equal(res.statusCode, 200, res.body);
-  // The fill answers as soon as it has decided; the work happens after. Poll rather than guess a duration.
+  // The fill answers as soon as it has decided; the work happens after. Its CBZ appears before the
+  // catalog scan completes, so wait for the actual job boundary before later cases inspect the gap.
   let written: string[] = [];
+  let job: any;
   for (let i = 0; i < 40; i++) {
     written = existsSync(join(root, FOLDER)) ? readdirSync(join(root, FOLDER)) : [];
-    if (written.some((f) => f.includes('Chapter 9'))) break;
+    const status = (await app.inject({ method: 'GET', url: '/api/sources/jobs', headers: { authorization: tok } })).json();
+    job = status.content.find((candidate: any) => candidate.folder === FOLDER);
+    if (job?.status === 'done' || job?.status === 'error') break;
     await new Promise((r) => setTimeout(r, 250));
   }
-  const jobs = (await app.inject({ method: 'GET', url: '/api/sources/jobs', headers: { authorization: tok } })).json();
+  assert.equal(job?.status, 'done', `fill must finish before inspecting its catalog: ${JSON.stringify(job)}`);
   assert.ok(written.some((f) => f.includes('Chapter 9')),
-    `chapter 9 should be on disk, saw ${JSON.stringify(written)}; job: ${JSON.stringify(jobs.content || jobs)}`);
+    `chapter 9 should be on disk, saw ${JSON.stringify(written)}; job: ${JSON.stringify(job)}`);
+  assert.equal((await q('SELECT id FROM lib_books WHERE series_id = $1 AND number = 9', [SERIES])).length, 1,
+    'the completed fill must index the repaired chapter before later scan tests run');
 
   // Read the ComicInfo straight out of the archive: this is the exact value persistScan will later read back
   // and copy over the series row, which is the whole point of the assertion below.

@@ -5,6 +5,7 @@ import { withAdult } from './adult';
 
 let accessToken: string | null = null;
 let refreshing: Promise<boolean> | null = null;
+let refreshNetworkFailure = false;
 
 /**
  * Who the offline store belongs to.
@@ -27,6 +28,9 @@ export function setCurrentUser(id: string | null) {
 export function getCurrentUser() {
   return currentUserId;
 }
+export function didRefreshFailOnNetwork() {
+  return refreshNetworkFailure;
+}
 
 export class ApiError extends Error {
   constructor(public status: number, public body: string) {
@@ -36,14 +40,16 @@ export class ApiError extends Error {
 
 export async function refreshSession(): Promise<boolean> {
   if (!refreshing) {
+    refreshNetworkFailure = false;
     refreshing = fetch('/auth/refresh', { method: 'POST', credentials: 'include' })
       .then(async (r) => {
+        refreshNetworkFailure = false;
         if (!r.ok) return false;
         const j = await r.json();
         accessToken = j.accessToken;
         return true;
       })
-      .catch(() => false)
+      .catch(() => { refreshNetworkFailure = true; return false; })
       .finally(() => {
         refreshing = null;
       });
@@ -56,9 +62,12 @@ interface Opts {
   json?: unknown;
   signal?: AbortSignal;
   headers?: Record<string, string>;
+  /** Outbox mutations belong to the account that created them, including across a refresh retry. */
+  accountId?: string;
 }
 
 async function raw(path: string, opts: Opts, retry: boolean): Promise<Response> {
+  if (opts.accountId && getCurrentUser() !== opts.accountId) throw new Error('The signed-in account changed before the request completed.');
   const headers = new Headers(opts.headers || {});
   if (accessToken) headers.set('authorization', `Bearer ${accessToken}`);
   const body = opts.json !== undefined ? JSON.stringify(opts.json) : undefined;
@@ -75,6 +84,7 @@ async function raw(path: string, opts: Opts, retry: boolean): Promise<Response> 
   });
 
   if (res.status === 401 && retry) {
+    if (opts.accountId && getCurrentUser() !== opts.accountId) throw new Error('The signed-in account changed before the request completed.');
     const ok = await refreshSession();
     if (ok) return raw(path, opts, false);
   }
@@ -87,6 +97,13 @@ export async function api<T = any>(path: string, opts: Opts = {}): Promise<T> {
   if (res.status === 204) return undefined as T;
   const ct = res.headers.get('content-type') || '';
   return (ct.includes('application/json') ? await res.json() : await res.text()) as T;
+}
+
+/** Binary API downloads need the same bearer/refresh path as JSON requests. */
+export async function apiBlob(path: string, opts: Opts = {}): Promise<Blob> {
+  const res = await raw(path, opts, true);
+  if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => ''));
+  return res.blob();
 }
 
 // ---- image URLs (authorized by the httpOnly yomi_img cookie) ----

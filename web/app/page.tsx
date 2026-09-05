@@ -13,7 +13,7 @@ import { Img, ProgressBar, Rail, RailSkeleton, SectionTitle, Reveal } from '@/co
 import { SeriesCard, ContinueCard } from '@/components/cards';
 import { HeroCarousel } from '@/components/HeroCarousel';
 import { AdultToggle } from '@/components/AdultToggle';
-import { IcPlay, IcSparkle, IcRefresh, IcBell } from '@/components/icons';
+import { IcPlay, IcSparkle, IcRefresh, IcBell, IcBook, IcGrid } from '@/components/icons';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { Avatar } from '@/components/Avatar';
 import { Lockup } from '@/components/Brand';
@@ -141,6 +141,21 @@ export default function HomePage() {
         </p>
         <AdultToggle className="shrink-0" />
       </div>
+
+      <section className="grid gap-3 px-4 pt-5 sm:grid-cols-2 lg:px-0">
+        <Link href="/library" className="card group relative overflow-hidden p-5 transition hover:border-accent/40">
+          <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-accent/10 blur-2xl" />
+          <IcGrid width={24} height={24} className="text-accent" />
+          <h2 className="mt-5 font-display text-xl font-bold">Manga</h2>
+          <p className="mt-1 text-sm text-fog-400">Panels, chapters, and your existing collections.</p>
+        </Link>
+        <Link href="/novels" className="card group relative overflow-hidden p-5 transition hover:border-accent/40">
+          <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-accent/10 blur-2xl" />
+          <IcBook width={24} height={24} className="text-accent" />
+          <h2 className="mt-5 font-display text-xl font-bold">Novels</h2>
+          <p className="mt-1 text-sm text-fog-400">Source discovery, focused prose, and offline chapters.</p>
+        </Link>
+      </section>
 
       {/* Keep reading */}
       {(data?.onDeck?.length ?? 0) > 0 && (

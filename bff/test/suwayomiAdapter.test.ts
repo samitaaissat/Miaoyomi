@@ -76,7 +76,7 @@ test('latest is claimed only when the extension supports it', async () => {
   assert.equal(makeSuwayomiAdapter({ ...LOCAL, supportsLatest: false }, fakeGql({})).latest, undefined);
 });
 
-test('chapters come back ascending, deduped, with dates', async () => {
+test('chapters preserve same-number releases and deduplicate only source identities', async () => {
   const { makeSuwayomiAdapter } = await load();
   const a = makeSuwayomiAdapter(LOCAL, fakeGql({
     fetchChapters: { fetchChapters: { chapters: [
@@ -84,13 +84,14 @@ test('chapters come back ascending, deduped, with dates', async () => {
       { id: 1, chapterNumber: 1, name: 'Chapter 1', pageCount: 3, uploadDate: '1787177840210' },
       { id: 2, chapterNumber: 2, name: 'Chapter 2', pageCount: 3, uploadDate: '1787177840269' },
       { id: 99, chapterNumber: 2, name: 'Chapter 2 (dupe scanlation)', pageCount: 3 },
+      { id: 99, chapterNumber: 2, name: 'Duplicate source record', pageCount: 3 },
     ] } },
   }));
   const cs = await a.listChapters('1');
-  assert.deepEqual(cs.map((c) => c.number), [1, 2, 3]);
+  assert.deepEqual(cs.map((c) => [c.number, c.sourceId]), [[1, '1'], [2, '2'], [2, '99'], [3, '33']]);
   assert.equal(cs[0].sourceId, '1');
   // pageCount -1 means "not counted yet" and must not be reported as a real page count
-  assert.equal(cs[2].pages, undefined);
+  assert.equal(cs[3].pages, undefined);
   assert.equal(cs[0].pages, 3);
   assert.equal(cs[0].publishedAt, new Date(1787177840210).toISOString());
 });

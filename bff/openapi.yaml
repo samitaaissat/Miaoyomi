@@ -36,6 +36,8 @@ tags:
     description: OPDS catalogue for external readers (HTTP Basic)
   - name: admin
     description: Administration (admin account and admin scope)
+  - name: novels
+    description: Prose sources, standard EPUB library and account progress
 components:
   securitySchemes:
     bearer:
@@ -52,6 +54,43 @@ components:
       in: cookie
       name: yomi_img
       description: Set at login so <img> tags can authenticate.
+  schemas:
+    NovelChapterPayload:
+      type: object
+      required:
+        - novelId
+        - chapterId
+        - novelTitle
+        - chapterTitle
+        - html
+        - sourceUrl
+        - archiveRevision
+      properties:
+        novelId:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        chapterId:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        novelTitle:
+          type: string
+        chapterTitle:
+          type: string
+        html:
+          type: string
+          description: Sanitized self-contained prose reconstructed from EPUB; embedded
+            images are data URLs.
+        sourceUrl:
+          type: string
+          format: uri
+        archiveRevision:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+          description: SHA-256 revision of the committed EPUB, not a numeric counter.
+        previousChapterId:
+          type: string
+        nextChapterId:
+          type: string
 paths:
   /livez:
     get:
@@ -4250,3 +4289,686 @@ paths:
           description: "Forbidden: token scope, account permission or age limit"
         "404":
           description: Not found, or not visible to this account
+
+  /api/sources/chapters:
+    get:
+      tags:
+        - sources
+      summary: List source chapters with stable identities
+      description: Query source (plugin ID) and sourceId (title ID). Preserves alternate releases with the
+        same chapter number. Requires source access and download permission.
+      operationId: get_api_sources_chapters
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+      parameters:
+        - name: source
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: sourceId
+          in: query
+          required: true
+          schema:
+            type: string
+  /api/sources/chapter/open:
+    post:
+      tags:
+        - sources
+      summary: Retrieve one manga chapter as CBZ and open it
+      description: Body source (plugin ID), sourceId (title ID), chapterId (chapter sourceId). Downloads only the selected
+        chapter and returns bookId and seriesId for the existing reader. Saved
+        provenance is reused. Requires source access and download permission.
+      operationId: post_api_sources_chapter_open
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+        "429":
+          description: The source is in a circuit-breaker cooldown
+        "503":
+          description: The source did not return a usable title
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - source
+                - sourceId
+                - chapterId
+              properties:
+                source:
+                  type: string
+                sourceId:
+                  type: string
+                chapterId:
+                  type: string
+
+  /api/novels/sources:
+    get:
+      tags:
+        - novels
+      summary: List novel source availability and typed filters
+      description: Enabled source metadata is hydrated after engine restarts. Requires
+        download permission; sources outside the account age policy are omitted.
+      operationId: get_api_novels_sources
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+        "504":
+          description: The private source engine exceeded its deadline
+
+  /api/novels/sources/{sourceId}:
+    post:
+      tags:
+        - novels
+      summary: Enable or disable a pinned novel source
+      description: Administrator only. Body enabled:boolean. Scripts must pass
+        pinned-digest and supported-capability checks.
+      operationId: post_api_novels_sources_sourceId_
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+        "504":
+          description: The private source engine exceeded its deadline
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - enabled
+              properties:
+                enabled:
+                  type: boolean
+
+  /api/novels/browse:
+    get:
+      tags:
+        - novels
+      summary: Browse a novel source catalog
+      description: Query sourceId, mode=popular|latest, page (1-based), filters (JSON
+        typed LNReader filter values). Unsupported latest mode returns 400.
+        Requires download permission.
+      operationId: get_api_novels_browse
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+        "504":
+          description: The private source engine exceeded its deadline
+      parameters:
+        - name: sourceId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - popular
+              - latest
+            default: popular
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: filters
+          in: query
+          required: false
+          schema:
+            type: string
+
+  /api/novels/search:
+    get:
+      tags:
+        - novels
+      summary: Search a novel source
+      description: Query sourceId, q and page (1-based). Returns items, page, hasMore.
+        Requires download permission.
+      operationId: get_api_novels_search
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+        "504":
+          description: The private source engine exceeded its deadline
+      parameters:
+        - name: sourceId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+
+  /api/novels/detail:
+    get:
+      tags:
+        - novels
+      summary: Retrieve novel metadata and chapter identities
+      description: Query sourceId and path from a source result. Grants this account
+        access to the novel metadata. No chapter body is downloaded. Requires
+        download permission.
+      operationId: get_api_novels_detail
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+        "504":
+          description: The private source engine exceeded its deadline
+      parameters:
+        - name: sourceId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+
+  /api/novels/library:
+    get:
+      tags:
+        - novels
+      summary: List this account’s saved novel library
+      description: Returns items with novel metadata and optional progress. Requires
+        an authenticated account.
+      operationId: get_api_novels_library
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+        "504":
+          description: The private source engine exceeded its deadline
+
+  /api/novels/{id}:
+    get:
+      tags:
+        - novels
+      summary: Read account-accessible novel metadata
+      description: Reconciles saved chapter flags and EPUB reading order. IDs are 64
+        lowercase hexadecimal characters.
+      operationId: get_api_novels_id_
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+        "504":
+          description: The private source engine exceeded its deadline
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: ^[a-f0-9]{64}$
+
+  /api/novels/{id}/library:
+    put:
+      tags:
+        - novels
+      summary: Change this account’s novel library membership
+      description: Body saved:boolean. Removing membership keeps the standard server
+        archive and does not remove device downloads.
+      operationId: put_api_novels_id_library
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+        "504":
+          description: The private source engine exceeded its deadline
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: ^[a-f0-9]{64}$
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - saved
+              properties:
+                saved:
+                  type: boolean
+
+  /api/novels/{id}/chapters/refresh:
+    post:
+      tags:
+        - novels
+      summary: Load another page of novel chapter metadata
+      description: Body page:string. Stable page identity prevents repeated cursors
+        from changing reading order. Requires source/download permission.
+      operationId: post_api_novels_id_chapters_refresh
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+        "504":
+          description: The private source engine exceeded its deadline
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: ^[a-f0-9]{64}$
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - page
+              properties:
+                page:
+                  type: string
+
+  /api/novels/{id}/chapters/{chapterId}/open:
+    post:
+      tags:
+        - novels
+      summary: Open one chapter, fetching it into EPUB when needed
+      description: Retrieves only the selected chapter. New retrieval requires current
+        download/source permission. Existing EPUB chapters work with the source
+        engine offline. Returns sanitized self-contained html, sourceUrl,
+        archiveRevision and adjacent chapter IDs.
+      operationId: post_api_novels_id_chapters_chapterId_open
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NovelChapterPayload"
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+        "504":
+          description: The private source engine exceeded its deadline
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: ^[a-f0-9]{64}$
+        - name: chapterId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: ^[a-f0-9]{64}$
+
+  /api/novels/{id}/chapters/{chapterId}:
+    get:
+      tags:
+        - novels
+      summary: Read an already saved EPUB chapter
+      description: Reads only the standard EPUB. Never fetches a missing chapter;
+        returns 404 not_saved.
+      operationId: get_api_novels_id_chapters_chapterId_
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NovelChapterPayload"
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+        "504":
+          description: The private source engine exceeded its deadline
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: ^[a-f0-9]{64}$
+        - name: chapterId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: ^[a-f0-9]{64}$
+
+  /api/novels/{id}/progress:
+    get:
+      tags:
+        - novels
+      summary: Get this account’s latest novel progress
+      description: Returns progress or null.
+      operationId: get_api_novels_id_progress
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+        "504":
+          description: The private source engine exceeded its deadline
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: ^[a-f0-9]{64}$
+    put:
+      tags:
+        - novels
+      summary: Merge account-scoped novel progress
+      description: Body chapterId, position (0..1), completed, updatedAt (Unix
+        milliseconds), mutationId. Newer positions win; completed remains true for
+        that chapter. Future timestamps are clamped.
+      operationId: put_api_novels_id_progress
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Success
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+        "504":
+          description: The private source engine exceeded its deadline
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: ^[a-f0-9]{64}$
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - chapterId
+                - position
+                - completed
+                - updatedAt
+                - mutationId
+              properties:
+                chapterId:
+                  type: string
+                  pattern: ^[a-f0-9]{64}$
+                position:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                completed:
+                  type: boolean
+                updatedAt:
+                  type: integer
+                  minimum: 0
+                mutationId:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+
+  /api/novels/{id}/export.epub:
+    get:
+      tags:
+        - novels
+      summary: Download the current standard EPUB
+      description: Exports saved chapters with authenticated bearer access; does not
+        download the rest of the novel. Returns 404 before any chapter is saved.
+      operationId: get_api_novels_id_export_epub
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Standard EPUB ZIP archive
+          content:
+            application/epub+zip:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid input
+        "401":
+          description: Authentication required
+        "403":
+          description: Account permission denied
+        "404":
+          description: Unknown or inaccessible resource
+        "409":
+          description: Source unsupported, disabled, or content unavailable
+        "502":
+          description: Source failed or is blocked
+        "504":
+          description: The private source engine exceeded its deadline
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: ^[a-f0-9]{64}$

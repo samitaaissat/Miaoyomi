@@ -28,14 +28,14 @@ const brand = localFont({
 });
 
 export const metadata: Metadata = {
-  title: 'Uchiyomi — your library, your way',
-  description: 'A cinematic, personal reader for your manga & manhwa.',
+  title: 'Miaoyomi — manga and novels, your way',
+  description: 'A private, source-powered reader for manga and prose.',
   manifest: '/manifest.webmanifest',
   appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'Uchiyomi' },
   icons: { icon: '/icons/favicon.png', apple: '/icons/apple-touch-icon.png' },
   openGraph: {
     title: 'Uchiyomi',
-    description: 'A cinematic, personal reader for your manga & manhwa.',
+    description: 'A private, source-powered reader for manga and prose.',
     images: ['/art/og.jpg'],
     type: 'website',
   },

@@ -523,3 +523,30 @@ an ordinary user. Leave it unset to keep managing roles in the admin panel.
 - SSO sessions appear in **Profile → Security** as a device named "SSO" and can be revoked like any other.
 - Signing in through SSO does not ask for a second factor here; your identity provider is responsible for
   that. Local password logins still use Uchiyomi's own 2FA.
+
+## Miaoyomi manga and novel additions
+
+Source chapter selection creates one CBZ and returns a scanner book ID for the existing reader. Novel detail requests fetch only metadata. Opening a novel chapter creates or updates its EPUB atomically; only chapters already retrieved are included in an export. The engine is private and is never called directly by a browser. All these routes require bearer authentication; source activation additionally requires an administrator.
+
+```text
+GET    /api/sources/chapters
+POST   /api/sources/chapter/open
+GET    /api/novels/sources
+POST   /api/novels/sources/{sourceId}
+GET    /api/novels/browse
+GET    /api/novels/search
+GET    /api/novels/detail
+GET    /api/novels/library
+GET    /api/novels/{id}
+PUT    /api/novels/{id}/library
+POST   /api/novels/{id}/chapters/refresh
+POST   /api/novels/{id}/chapters/{chapterId}/open
+GET    /api/novels/{id}/chapters/{chapterId}
+GET    /api/novels/{id}/progress
+PUT    /api/novels/{id}/progress
+GET    /api/novels/{id}/export.epub
+```
+
+Novel IDs and chapter IDs are deterministic 64-character lowercase SHA-256 identifiers. Use the `path` returned by browse/search to request detail, then the returned chapter `id` to open it. `html` in the chapter response is reconstructed from the standard EPUB and includes embedded image data URLs; it is never stored as prose in PostgreSQL. `previousChapterId` and `nextChapterId` drive the reader. Progress accepts a fractional `position`, `completed`, a millisecond `updatedAt`, and a unique `mutationId`; requests are scoped to the authenticated account. Downloading `export.epub` also needs the bearer header; use a fetch/blob download in browser clients.
+
+Source failures return non-2xx `{error,message}` responses. Disabled/unsupported sources return 409. A saved chapter remains readable with the engine offline; missing content always rechecks current retrieval permission. Device IndexedDB downloads and their queued progress belong to the active account and are separate from the server EPUB. See the OpenAPI reference for each request.

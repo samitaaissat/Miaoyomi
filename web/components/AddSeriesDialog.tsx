@@ -11,11 +11,13 @@ import { Switch } from '@/components/Switch';
 import { useToast } from '@/components/Toast';
 import { IcCheck, IcChevronLeft } from '@/components/icons';
 import { t as tr } from '@/lib/i18n';
+import { openSourceChapter, sourceChapterKey, type SourceChapterChoice } from '@/lib/mangaImmediate';
 
 export interface Provider { source: string; name: string; sourceId: string; title: string; coverUrl?: string }
 interface Detail {
   source: string; sourceId: string; title: string; summary: string; coverUrl: string | null;
   genres: string[]; status: string; count: number; first: number | null; last: number | null;
+  chapters: SourceChapterChoice[];
 }
 interface Job { folder: string; title: string; total: number; done: number; status: string }
 
@@ -63,6 +65,10 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
   const [dup, setDup] = useState<string | null>(null);
   const [done, setDone] = useState<{ title: string; folder: string; chapters: number; started?: boolean } | null>(null);
   const [opening, setOpening] = useState(false);
+  const [reading, setReading] = useState(false);
+  const [chapterId, setChapterId] = useState('');
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [detailRetry, setDetailRetry] = useState(0);
   const title = seed.kind === 'result' ? seed.provider.title : seed.title;
 
   // Which request the state belongs to. Picking source A then B and having A land last used to overwrite B.
@@ -81,12 +87,23 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
   useEffect(() => {
     if (!picked) return;
     const mine = ++want.current;
-    setLoading(true); setDetail(null);
+    setLoading(true); setDetail(null); setDetailError(null);
     api<Detail>(`/api/sources/detail?source=${encodeURIComponent(picked.source)}&sourceId=${encodeURIComponent(picked.sourceId)}`)
-      .then((d) => { if (mine === want.current) { setDetail(d); setCount(d.count); } })
-      .catch(() => { if (mine === want.current) setDetail(null); })
+      .then((d) => {
+        if (mine === want.current) {
+          setDetail(d);
+          setCount(d.count);
+          setChapterId(d.chapters[0]?.id || '');
+        }
+      })
+      .catch((error) => {
+        if (mine === want.current) {
+          setDetail(null);
+          setDetailError(msgOf(error, tr('Could not load this title. Try again.')));
+        }
+      })
       .finally(() => { if (mine === want.current) setLoading(false); });
-  }, [picked]);
+  }, [picked, detailRetry]);
 
   // Only while the dialog is showing a live download.
   const { data: jobs } = useQuery({
@@ -129,6 +146,19 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
       qc.invalidateQueries({ queryKey: ['library'] });
       router.push(hit ? `/series/?id=${hit.id}` : '/downloads/');
     } catch { router.push('/downloads/'); }
+  };
+
+  const readNow = async () => {
+    if (!picked || !chapterId) return;
+    setReading(true);
+    try {
+      const result = await openSourceChapter({ source: picked.source, sourceId: picked.sourceId, chapterId });
+      qc.invalidateQueries({ queryKey: ['library'] });
+      router.push(result.readerUrl);
+    } catch (error) {
+      toast(msgOf(error, tr('Could not open this chapter. Try again.')), 'error');
+      setReading(false);
+    }
   };
 
   // ---------------------------------------------------------------- done
@@ -201,8 +231,13 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
     // Not dismissable while the request is in flight. Escape or a backdrop click used to unmount the dialog
     // mid-add: the add still completed, but `setDone` and `onAdded` ran against nothing, so there was no
     // confirmation and the tile was never marked as added -- the worst possible version of "did that work?"
-    <Modal title={detail?.title || title} onClose={adding ? () => {} : onClose} wide>
-      {loading || !detail ? (
+    <Modal title={detail?.title || title} onClose={adding || reading ? () => {} : onClose} wide>
+      {detailError ? (
+        <div className="py-8 text-center">
+          <p role="alert" className="text-sm text-amber-300">{detailError}</p>
+          <button className="btn-ghost mt-3" onClick={() => setDetailRetry((value) => value + 1)}>{tr('Try again')}</button>
+        </div>
+      ) : loading || !detail ? (
         <p className="py-10 text-center text-sm text-fog-500">{tr('Loading…')}</p>
       ) : (
         <div className="sm:flex sm:gap-4">
@@ -212,7 +247,7 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
           </div>
           <div className="min-w-0 flex-1">
             {providers && providers.length > 1 && (
-              <button onClick={() => { setPicked(null); setDetail(null); }} className="chip mb-2 text-xs">
+              <button disabled={adding || reading} onClick={() => { setPicked(null); setDetail(null); }} className="chip mb-2 text-xs">
                 <IcChevronLeft width={13} height={13} />{tr('Change source')}
               </button>
             )}
@@ -225,27 +260,47 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
             )}
             {summary && <p className="mt-2 line-clamp-4 text-xs leading-relaxed text-fog-400">{summary}</p>}
 
-            <label className="mb-1 mt-4 block text-xs font-semibold uppercase tracking-wider text-fog-500">{tr('Chapters to download')}</label>
-            <select value={count} onChange={(e) => setCount(Number(e.target.value))} className="field">
-              <option value={detail.count}>{tr('All ({n})', { n: detail.count })}</option>
-              {presets.map((n) => <option key={n} value={n}>{tr('First {n}', { n })}</option>)}
+            <label className="mb-1 mt-4 block text-xs font-semibold uppercase tracking-wider text-fog-500">{tr('Choose a chapter')}</label>
+            <select disabled={adding || reading} value={chapterId} onChange={(e) => setChapterId(e.target.value)} className="field">
+              {detail.chapters.map((chapter) => (
+                <option key={sourceChapterKey(chapter)} value={chapter.id}>
+                  {tr('Chapter {n}', { n: chapter.number })}
+                  {chapter.title ? ` · ${chapter.title}` : ''}
+                  {chapter.lang ? ` · ${chapter.lang}` : ''}
+                </option>
+              ))}
             </select>
-
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <span className="text-sm text-fog-200">{tr('Auto-update new chapters')}</span>
-              <Switch on={autoUpdate} onChange={setAutoUpdate} label={tr('Auto-update new chapters')} />
-            </div>
-
-            {count > 40 && (
-              <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-300">
-                {tr('Grabbing many chapters at once can get you rate-limited. It pauses on its own and you can resume later.')}
-              </p>
-            )}
-            {dup && <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-300">{dup}</p>}
-
-            <button onClick={() => add(!!dup)} disabled={adding} className="btn-accent mt-4 w-full py-2.5 text-sm disabled:opacity-50">
-              {adding ? tr('Working…') : dup ? tr('Add anyway') : tr('Add to library')}
+            <button onClick={readNow} disabled={adding || reading || !chapterId}
+              className="btn-accent mt-3 w-full py-2.5 text-sm disabled:opacity-50">
+              {reading ? tr('Opening…') : tr('Read now')}
             </button>
+
+            <details className="mt-4 rounded-lg border border-ink-700 px-3 py-2">
+              <summary className="cursor-pointer text-sm text-fog-300">{tr('Add more chapters to the library')}</summary>
+              <div className="pb-1 pt-3">
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-fog-500">{tr('Chapters to download')}</label>
+                <select value={count} onChange={(e) => setCount(Number(e.target.value))} className="field">
+                  <option value={detail.count}>{tr('All ({n})', { n: detail.count })}</option>
+                  {presets.map((n) => <option key={n} value={n}>{tr('First {n}', { n })}</option>)}
+                </select>
+
+                <div className="mt-3 flex items-center justify-between gap-3">
+                  <span className="text-sm text-fog-200">{tr('Auto-update new chapters')}</span>
+                  <Switch on={autoUpdate} onChange={setAutoUpdate} label={tr('Auto-update new chapters')} />
+                </div>
+
+                {count > 40 && (
+                  <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-300">
+                    {tr('Grabbing many chapters at once can get you rate-limited. It pauses on its own and you can resume later.')}
+                  </p>
+                )}
+                {dup && <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-300">{dup}</p>}
+
+                <button onClick={() => add(!!dup)} disabled={adding || reading} className="btn-ghost mt-3 w-full py-2.5 text-sm disabled:opacity-50">
+                  {adding ? tr('Working…') : dup ? tr('Add anyway') : tr('Add to library')}
+                </button>
+              </div>
+            </details>
           </div>
         </div>
       )}

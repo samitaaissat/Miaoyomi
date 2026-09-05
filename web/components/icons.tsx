@@ -19,6 +19,9 @@ export const IcHome = (p: P) => (
 export const IcGrid = (p: P) => (
   <svg {...base(p)}><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>
 );
+export const IcBook = (p: P) => (
+  <svg {...base(p)}><path d="M4 5.5A3.5 3.5 0 0 1 7.5 2H12v18H7.5A3.5 3.5 0 0 0 4 23V5.5Z" /><path d="M20 5.5A3.5 3.5 0 0 0 16.5 2H12v18h4.5A3.5 3.5 0 0 1 20 23V5.5Z" /></svg>
+);
 export const IcSearch = (p: P) => (
   <svg {...base(p)}><circle cx="11" cy="11" r="7" /><path d="m21 21-3.5-3.5" /></svg>
 );

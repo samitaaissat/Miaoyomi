@@ -39,6 +39,19 @@ export interface DownloadInput {
   seriesFolder: string; // relative "<source>/<title>" (existing lib_series.folder, or new)
   chapter: SourceChapter;
   meta?: Partial<SourceSeries> & { series?: string };
+  /** Optional collision-free CBZ basename for callers that track source provenance. */
+  archiveName?: string;
+}
+
+function archiveNameOf(input: DownloadInput): string {
+  if (input.archiveName === undefined) return `Chapter ${input.chapter.number}.cbz`;
+  const name = input.archiveName;
+  if (
+    name.length < 5 || name.length > 180 ||
+    !/^[\p{L}\p{N}][\p{L}\p{N} ._()\[\]-]*\.cbz$/u.test(name) ||
+    name.includes('..')
+  ) throw new Error('invalid archive filename');
+  return name;
 }
 
 // Politeness limits, applied per source. Adding a series and importing hundreds both fan out through here,
@@ -117,7 +130,7 @@ export async function downloadChapter(input: DownloadInput): Promise<{ file: str
   const src = getSource(input.sourceId);
   if (!src) throw new Error(`unknown source ${input.sourceId}`);
 
-  const rel = join(input.seriesFolder, `Chapter ${input.chapter.number}.cbz`);
+  const rel = join(input.seriesFolder, archiveNameOf(input));
   const abs = join(DL_ROOT, rel);
   // the already-downloaded check is free, so do it before queueing for a slot
   if (await stat(abs).then(() => true).catch(() => false)) return { file: rel, pages: 0, skipped: true };

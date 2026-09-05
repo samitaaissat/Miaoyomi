@@ -76,6 +76,15 @@ async function doFetch(handlers: Record<string, Function>, url: string) {
   return responded ? await responded : undefined;
 }
 
+async function doNavigate(handlers: Record<string, Function>, url: string) {
+  let responded: Promise<any> | undefined;
+  await handlers.fetch({
+    request: { method: 'GET', url, mode: 'navigate' },
+    respondWith: (p: any) => { responded = p; },
+  });
+  return responded ? await responded : undefined;
+}
+
 test('signing out empties the caches that hold one account’s answers', async () => {
   const { handlers, store } = loadSw();
   assert.ok(handlers.message, 'the SW must listen for a sign-out message at all');
@@ -112,4 +121,61 @@ test('source browsing is still never cached', async () => {
   await doFetch(handlers, 'https://yomi.test/api/sources/latest?source=x');
   const apiCache = [...store.keys()].find((k) => k.startsWith('yomi-api-'));
   assert.ok(!apiCache || store.get(apiCache)!.size === 0, 'per-account source answers must not be stored');
+});
+
+test('novel API responses are never put in a cache shared by accounts', async () => {
+  const { handlers, store } = loadSw();
+  await doFetch(handlers, 'https://yomi.test/api/novels/library');
+  await doFetch(handlers, 'https://yomi.test/api/novels/n1/chapters/c1');
+  const apiCache = [...store.keys()].find((k) => k.startsWith('yomi-api-'));
+  assert.ok(!apiCache || store.get(apiCache)!.size === 0, 'novel metadata and prose must remain outside Cache Storage');
+});
+
+test('navigation caches the actual novel reader route for a cold offline reload', async () => {
+  const { handlers, store, ctx } = loadSw();
+  const reader = 'https://yomi.test/novels/read/?novelId=n1&chapterId=c1';
+  await doNavigate(handlers, reader);
+  const shell = [...store.keys()].find((k) => k.startsWith('yomi-shell-'))!;
+  assert.ok(store.get(shell)!.has(reader), 'the reader navigation itself must be cached');
+
+  ctx.fetch = async () => { throw new TypeError('offline'); };
+  const response = await doNavigate(handlers, reader);
+  assert.equal(response?.status, 200, 'the same reader route must cold reload offline');
+});
+
+test('saving a novel primes its exact reader navigation even after an SPA transition', async () => {
+  const { handlers, store, ctx } = loadSw();
+  const reader = 'https://yomi.test/novels/read/?novelId=n1&chapterId=c1';
+  const waits: Promise<any>[] = [];
+  await handlers.message({
+    data: { type: 'miaoyomi-prime-novel', urls: [reader] },
+    waitUntil: (promise: Promise<any>) => waits.push(promise),
+  });
+  await Promise.all(waits);
+  const shell = [...store.keys()].find((key) => key.startsWith('yomi-shell-'))!;
+  assert.ok(store.get(shell)!.has(reader), 'Save Offline must cache the exact query-routed reader URL');
+
+  ctx.fetch = async () => { throw new TypeError('offline'); };
+  assert.equal((await doNavigate(handlers, reader))?.status, 200);
+});
+
+test('Save Offline receives acknowledgement only after the reader shell is cached', async () => {
+  const { handlers, store, ctx } = loadSw();
+  const reader = 'https://yomi.test/novels/read/?novelId=n1&chapterId=c1';
+  let release!: () => void;
+  ctx.fetch = async () => { await new Promise<void>((resolve) => { release = resolve; }); return new Response('<html></html>'); };
+  const replies: unknown[] = [];
+  const waits: Promise<any>[] = [];
+  handlers.message({
+    data: { type: 'miaoyomi-prime-novel', urls: [reader] },
+    ports: [{ postMessage: (reply: unknown) => replies.push(reply) }],
+    waitUntil: (promise: Promise<any>) => waits.push(promise),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(replies, []);
+  release();
+  await Promise.all(waits);
+  assert.equal((replies[0] as { ok?: boolean })?.ok, true);
+  const shell = [...store.keys()].find((key) => key.startsWith('yomi-shell-'))!;
+  assert.ok(store.get(shell)!.has(reader));
 });

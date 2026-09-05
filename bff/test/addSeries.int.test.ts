@@ -37,6 +37,8 @@ if (DSN) {
   process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-at-least-16-chars';
   process.env.CONFIG_DIR = process.env.CONFIG_DIR || '/tmp/uchiyomi-test-config';
   process.env.LIBRARY_BACKEND = 'owned';
+  // Never let a fixture scan the host default /library (which is /Library on macOS).
+  process.env.LIBRARY_ROOT = join(root, '_existing-library');
   process.env.DL_ROOT = root;
 }
 const skip = DSN ? false : 'set TEST_DATABASE_URL to run';

@@ -62,6 +62,9 @@ const schema = z.object({
   // on the JVM and exposes them over GraphQL. Empty issuer = feature off, exactly like OIDC. Uchiyomi keeps
   // owning the library, reader, downloads and updates; Suwayomi only answers search/chapters/pages.
   SUWAYOMI_URL: z.string().default(''),
+  NOVEL_ENGINE_URL: z.string().default(''),
+  NOVEL_ENGINE_TOKEN: z.string().default(''),
+  NOVEL_LIBRARY_PATH: z.string().default('/novels'),
   SUWAYOMI_USERNAME: z.string().default(''),
   SUWAYOMI_PASSWORD: z.string().default(''),
   // Suwayomi can expose hundreds of sources; cross-source search fans out to every REGISTERED source, so

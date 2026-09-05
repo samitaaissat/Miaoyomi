@@ -28,6 +28,8 @@ const DSN = process.env.TEST_DATABASE_URL;
 let ROOT = '';
 if (DSN) {
   ROOT = mkdtempSync(join(tmpdir(), 'yomi-sweep-'));
+  // Never let a fixture scan the host default /library (which is /Library on macOS).
+  process.env.LIBRARY_ROOT = join(ROOT, '_existing-library');
   process.env.DL_ROOT = ROOT;
   process.env.MIN_FREE_GB = '0'; // the disk floor belongs to diskGuard.test.ts
   process.env.DATABASE_URL = DSN;

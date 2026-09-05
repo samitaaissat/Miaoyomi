@@ -41,6 +41,7 @@ import {
 const FILL_MAX_CHAPTERS = 300;
 import { logAudit } from '../lib/audit';
 import { env } from '../env';
+import { MangaImmediateError, openMangaChapter } from '../lib/mangaImmediate';
 // The "already in library" annotation is deliberately library-wide: it answers "would adding this be a
 // duplicate on this server", which is a property of the server, not of the person asking.
 //
@@ -150,7 +151,7 @@ const DETAIL_TTL = 90_000;
 const detailCache = new Map<string, { at: number; series: SourceSeries | null; chapters: SourceChapter[] }>();
 
 async function seriesAndChapters(src: SourceAdapter, sourceId: string):
-  Promise<{ series: SourceSeries | null; chapters: SourceChapter[] }> {
+  Promise<{ series: SourceSeries | null; chapters: SourceChapter[]; failed?: boolean }> {
   const key = `${src.id}:${sourceId}`;
   const hit = detailCache.get(key);
   if (hit && Date.now() - hit.at < DETAIL_TTL) return { series: hit.series, chapters: hit.chapters };
@@ -170,11 +171,20 @@ async function seriesAndChapters(src: SourceAdapter, sourceId: string):
   // pinned for ninety seconds, so retrying inside the window returns the same wrong advice. Before the cache
   // existed the same catch was here, but a retry worked; the cache is what made it stick.
   if (!failed) detailCache.set(key, { at: Date.now(), series, chapters });
-  return { series, chapters };
+  return { series, chapters, failed };
 }
 
 /** Exposed for tests: the cache is process-global and would otherwise leak between cases. */
 export function clearDetailCache(): void { detailCache.clear(); }
+
+const chapterDto = (chapter: SourceChapter) => ({
+  id: chapter.sourceId,
+  number: chapter.number,
+  title: chapter.title || `Chapter ${chapter.number}`,
+  lang: chapter.lang || null,
+  pages: chapter.pages ?? null,
+  publishedAt: chapter.publishedAt || null,
+});
 const latestCache = new Map<string, { at: number; items: SourceSeries[] }>();
 const latestInflight = new Map<string, Promise<SourceSeries[]>>();
 
@@ -992,14 +1002,69 @@ export default async function sourceRoutes(app: FastifyInstance) {
     if (!src || !sourceId) return reply.code(400).send({ error: 'bad_request' });
     if (!sourceAllowedFor(src, vc(req).maxAgeRating)) return denySource(reply);
     // Through the shared lookup so the add that usually follows this reuses it rather than re-solving.
-    const { series, chapters } = await seriesAndChapters(src, sourceId);
+    const { series, chapters, failed } = await seriesAndChapters(src, sourceId);
+    if (failed) return reply.code(502).send({ error: 'source_unavailable', message: `${src.name} could not load this title. Try again later.` });
     const nums = chapters.map((c) => c.number);
     return {
       source, sourceId,
       title: series?.title || '', summary: series?.summary || '', coverUrl: series?.coverUrl || null,
       genres: series?.genres || [], status: series?.status || '',
       count: chapters.length, first: nums.length ? Math.min(...nums) : null, last: nums.length ? Math.max(...nums) : null,
+      chapters: chapters.map(chapterDto),
     };
+  });
+
+  app.get('/api/sources/chapters', async (req, reply) => {
+    const { source, sourceId } = req.query as { source?: string; sourceId?: string };
+    const src = source ? getSource(source) : null;
+    if (!src || !sourceId) return reply.code(400).send({ error: 'bad_request' });
+    if (!sourceAllowedFor(src, vc(req).maxAgeRating)) return denySource(reply);
+    if (await isDisabled(source!).catch(() => false)) return reply.code(409).send({ error: 'disabled' });
+    const { chapters, failed } = await seriesAndChapters(src, sourceId);
+    if (failed) return reply.code(502).send({ error: 'source_unavailable', message: `${src.name} could not load this chapter list. Try again later.` });
+    return { content: chapters.map(chapterDto) };
+  });
+
+  app.post('/api/sources/chapter/open', async (req, reply) => {
+    const { source, sourceId, chapterId } = (req.body ?? {}) as
+      { source?: string; sourceId?: string; chapterId?: string };
+    const src = source ? getSource(source) : null;
+    if (!src || !sourceId || !chapterId) return reply.code(400).send({ error: 'bad_request' });
+    if (!sourceAllowedFor(src, vc(req).maxAgeRating)) return denySource(reply);
+    if (await isDisabled(src.id).catch(() => false)) return reply.code(409).send({ error: 'disabled' });
+    const blocked = await blockedNow(src.id).catch(() => null);
+    if (blocked) {
+      return reply.code(429).send({
+        error: 'source_unavailable', status: blocked.status,
+        message: `${src.name} is temporarily unavailable. Try again later.`,
+      });
+    }
+
+    const { series, chapters, failed } = await seriesAndChapters(src, sourceId);
+    if (failed) return reply.code(502).send({ error: 'source_unavailable', message: `${src.name} could not load this chapter list. Try again later.` });
+    if (!series?.title?.trim()) {
+      return reply.code(503).send({ error: 'no_title', message: `${src.name} did not return this title.` });
+    }
+    const chapter = chapters.find((item) => item.sourceId === chapterId);
+    if (!chapter) return reply.code(404).send({ error: 'chapter_not_found' });
+
+    try {
+      const result = await openMangaChapter({
+        adapter: src,
+        series: { ...series, sourceId },
+        chapter,
+        viewCtx: vc(req),
+      });
+      logAudit('download.chapter.open', {
+        userId: userIdOf(req), detail: { source, sourceId, chapterId, bookId: result.bookId }, req,
+      });
+      return result;
+    } catch (error) {
+      if (error instanceof MangaImmediateError) {
+        return reply.code(error.status).send({ error: error.code, message: error.message });
+      }
+      throw error;
+    }
   });
 
   app.post('/api/sources/add', async (req, reply) => {

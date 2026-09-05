@@ -23,6 +23,8 @@ const DSN = process.env.TEST_DATABASE_URL;
 let ROOT = '';
 if (DSN) {
   ROOT = mkdtempSync(join(tmpdir(), 'yomi-upd-'));
+  // Never let a fixture scan the host default /library (which is /Library on macOS).
+  process.env.LIBRARY_ROOT = join(ROOT, '_existing-library');
   process.env.DL_ROOT = ROOT;
   process.env.DOWNLOAD_MIN_GAP_MS = '0';
   process.env.DOWNLOAD_PAGE_GAP_MS = '0';
