@@ -16,6 +16,7 @@ import { q, one } from '../lib/db';
 import { viewCtxFor, visibleBookFile, seriesVisible, SYSTEM_CTX, type ViewCtx } from '../lib/visibility';
 import { artFile } from '../lib/seriesArt';
 import { HERO_FRAMES, heroFit, type HeroAr } from '../lib/heroFrame';
+import { runSourceRequest, sourceRequestSignal } from '../lib/sourceRequests';
 
 async function fetchUpstream(path: string): Promise<Buffer> {
   const res = await komgaImage(path);
@@ -92,22 +93,21 @@ async function fetchCoverImage(u: string, source?: string): Promise<Buffer> {
       // up to 95 seconds; behind an <img> that is a tile that never resolves. The cookies are an optimisation
       // here -- the plain referer-only fetch below usually works -- so waiting more than a moment for them is
       // strictly worse than going without.
-      let timer: NodeJS.Timeout | undefined;
-      const s = await Promise.race([
-        cfSession(u),
-        new Promise<never>((_, rej) => {
-          timer = setTimeout(() => rej(new Error('cf timeout')), CF_IMAGE_TIMEOUT_MS);
-        }),
-      ]).finally(() => clearTimeout(timer)); // or the loser holds the event loop open for 5s
+      const s = await cfSession(u, sourceRequestSignal(CF_IMAGE_TIMEOUT_MS));
       headers.cookie = s.cookie;
       headers['user-agent'] = s.userAgent;
     } catch {
       /* image host isn't behind Cloudflare, or took too long — proceed with the referer-only headers */
     }
   }
-  const r = await fetch(u, { headers, signal: AbortSignal.timeout(20000) });
-  if (!r.ok) throw Object.assign(new Error('cover'), { statusCode: r.status });
-  return Buffer.from(await r.arrayBuffer());
+  return runSourceRequest(source || parsed.origin, async signal => {
+    const r = await fetch(u, { headers, signal });
+    if (!r.ok) {
+      await r.body?.cancel();
+      throw Object.assign(new Error('cover'), { statusCode: r.status });
+    }
+    return Buffer.from(await r.arrayBuffer());
+  }, { timeoutMs: 20000 });
 }
 
 // ---- series backdrop recipes (module-level so the pre-warmer can build them without a request) ----
@@ -448,12 +448,17 @@ export default async function imageRoutes(app: FastifyInstance) {
     // the package name lands in a URL path, so allow only what a package name can actually contain
     if (!/^[A-Za-z0-9._-]{1,200}$/.test(pkgName)) return reply.code(400).send({ error: 'bad' });
     return serveImage(req, reply, `swicon:${pkgName}`, async () => {
-      const r = await fetch(suwayomiUrl(`/api/v1/extension/icon/${pkgName}`), {
-        headers: suwayomiImageHeaders(),
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!r.ok) throw new Error(`extension icon ${r.status}`);
-      const buffer = await sharp(Buffer.from(await r.arrayBuffer()))
+      const raw = await runSourceRequest('suwayomi', async signal => {
+        const r = await fetch(suwayomiUrl(`/api/v1/extension/icon/${pkgName}`), {
+          headers: suwayomiImageHeaders(), signal,
+        });
+        if (!r.ok) {
+          await r.body?.cancel();
+          throw new Error(`extension icon ${r.status}`);
+        }
+        return Buffer.from(await r.arrayBuffer());
+      }, { timeoutMs: 15000 });
+      const buffer = await sharp(raw)
         .resize({ width: 96, withoutEnlargement: true })
         .webp({ quality: 80 })
         .toBuffer();
@@ -543,9 +548,15 @@ const ICON_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like
 async function sourceIconBytes(src: { id: string; iconUrl?: string; base?: string }): Promise<Buffer | null> {
   const grab = async (url: string, headers: Record<string, string> = {}): Promise<Buffer | null> => {
     try {
-      const r = await fetch(url, { headers: { 'user-agent': ICON_UA, ...headers }, signal: AbortSignal.timeout(8000) });
-      if (!r.ok) return null;
-      const buf = Buffer.from(await r.arrayBuffer());
+      const buf = await runSourceRequest(src.id, async signal => {
+        const r = await fetch(url, { headers: { 'user-agent': ICON_UA, ...headers }, signal });
+        if (!r.ok) {
+          await r.body?.cancel();
+          return null;
+        }
+        return Buffer.from(await r.arrayBuffer());
+      }, { timeoutMs: 8000 });
+      if (!buf) return null;
       // A 0-byte body, or an HTML "not found" page wearing an image's URL, is not an icon.
       return buf.length > 64 && !/^\s*<(?:!doctype|html)/i.test(buf.subarray(0, 40).toString('latin1')) ? buf : null;
     } catch { return null; }
@@ -567,9 +578,15 @@ async function sourceIconBytes(src: { id: string; iconUrl?: string; base?: strin
 
   // 3. Whatever the homepage declares. Takes the last <link rel=icon>, which is conventionally the largest.
   try {
-    const r = await fetch(origin, { headers: { 'user-agent': ICON_UA }, signal: AbortSignal.timeout(8000) });
-    if (!r.ok) return null;
-    const html = (await r.text()).slice(0, 60000);
+    const html = await runSourceRequest(src.id, async signal => {
+      const r = await fetch(origin, { headers: { 'user-agent': ICON_UA }, signal });
+      if (!r.ok) {
+        await r.body?.cancel();
+        return null;
+      }
+      return (await r.text()).slice(0, 60000);
+    }, { timeoutMs: 8000 });
+    if (!html) return null;
     const hrefs = [...html.matchAll(/<link[^>]+rel="[^"]*icon[^"]*"[^>]*>/gi)]
       .map((m) => (m[0].match(/href="([^"]+)"/i) || [])[1])
       .filter(Boolean) as string[];

@@ -4,6 +4,7 @@ import { executePlugin } from './executor.mjs';
 import { NetworkBroker } from './network.mjs';
 import { Registry } from './registry.mjs';
 import { EngineError } from './errors.mjs';
+import { TaskQueue } from './task-queue.mjs';
 const methods = ['popularNovels', 'searchNovels', 'parseNovel', 'parsePage', 'parseChapter', 'resolveUrl'];
 const bad = message => new EngineError('INVALID_CALL', message, 400);
 export function validateInvocation(body) {
@@ -14,13 +15,24 @@ export function validateInvocation(body) {
   else if (typeof a[0] !== 'string' || !a[0] || a[0].length > 4096) throw bad('Source method expects a nonempty path');
   if (body.method === 'parsePage' && typeof a[1] !== 'string') throw bad('parsePage expects a page string');
 }
-export async function createApp({ token = process.env.NOVEL_ENGINE_TOKEN, registry, broker = new NetworkBroker(), concurrency = 2, deadlineMs = 20_000, logger = false } = {}) {
+export async function createApp({ token = process.env.NOVEL_ENGINE_TOKEN, registry, broker = new NetworkBroker(), concurrency = 4, queueLimit = 32, queueTimeoutMs = 30_000, deadlineMs = 20_000, logger = false } = {}) {
   if (!token) throw Error('NOVEL_ENGINE_TOKEN is required');
   registry ??= await Registry.open();
   const app = Fastify({ logger, bodyLimit: 128 * 1024 });
   const expected = createHash('sha256').update(`Bearer ${token}`).digest();
-  let active = 0;
-  const bounded = async callback => { if (active >= concurrency) throw new EngineError('ENGINE_BUSY', 'Novel engine concurrency limit reached; retry shortly', 502); active++; try { return await callback(); } finally { active--; } };
+  const queue = new TaskQueue({ concurrency, queueLimit, queueTimeoutMs });
+  const shutdown = new AbortController();
+  app.addHook('preClose', async () => { shutdown.abort(); });
+  const bounded = async (request, reply, callback, key) => {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const close = () => { if (!reply.raw.writableEnded) abort(); };
+    request.raw.once('aborted', abort);
+    reply.raw.once('close', close);
+    const signal = AbortSignal.any([controller.signal, shutdown.signal]);
+    try { return await queue.run(() => callback(signal), { key, signal }); }
+    finally { request.raw.off('aborted', abort); reply.raw.off('close', close); }
+  };
   app.addHook('onRequest', async request => {
     if (request.method === 'GET' && request.url === '/healthz') return;
     const provided = createHash('sha256').update(request.headers.authorization || '').digest();
@@ -29,31 +41,31 @@ export async function createApp({ token = process.env.NOVEL_ENGINE_TOKEN, regist
   app.setErrorHandler((error, _request, reply) => reply.code(error.status || (error.statusCode === 400 || error.statusCode === 413 ? 400 : 502)).send({ error: error.code || 'ENGINE_ERROR', message: error.message }));
   app.get('/healthz', async () => ({ ok: true }));
   app.get('/v1/sources', async () => ({ sources: registry.list() }));
-  app.get('/v1/sources/:id', async request => ({ source: await bounded(() => registry.get(request.params.id)) }));
-  app.post('/v1/sources/:id', async request => {
+  app.get('/v1/sources/:id', async (request, reply) => ({ source: await bounded(request, reply, () => registry.get(request.params.id), request.params.id) }));
+  app.post('/v1/sources/:id', async (request, reply) => {
     if (!request.body || typeof request.body.enabled !== 'boolean') throw bad('enabled must be a boolean');
-    return { source: await bounded(() => registry.enable(request.params.id, request.body.enabled)) };
+    return { source: await bounded(request, reply, () => registry.enable(request.params.id, request.body.enabled), request.params.id) };
   });
-  app.post('/v1/invoke', async request => {
+  app.post('/v1/invoke', async (request, reply) => {
     validateInvocation(request.body);
     const { sourceId, method, args } = request.body;
-    const entry = registry.active(sourceId);
-    return bounded(async () => {
-      if (entry.running) throw new EngineError('SOURCE_BUSY', 'Source already has an active request; retry shortly', 502);
+    registry.active(sourceId);
+    return bounded(request, reply, async signal => {
+      const entry = registry.active(sourceId);
       entry.running = true;
       let requests = 0;
       try {
-        const result = await executePlugin(entry.script, method, args, { deadlineMs, storageSnapshot: entry.storageExpires > Date.now() ? entry.storage : {}, onStorage: storage => { entry.storage = storage; entry.storageExpires = Date.now() + 15 * 60 * 1000; }, fetch: (url, init, signal) => { if (++requests > 32) throw new EngineError('REQUEST_LIMIT', 'Plugin request limit exceeded'); return broker.fetch(entry.source, url, init, signal); } });
+        const result = await executePlugin(entry.script, method, args, { signal, deadlineMs, storageSnapshot: entry.storageExpires > Date.now() ? entry.storage : {}, onStorage: storage => { entry.storage = storage; entry.storageExpires = Date.now() + 15 * 60 * 1000; }, fetch: (url, init, signal) => { if (++requests > 32) throw new EngineError('REQUEST_LIMIT', 'Plugin request limit exceeded'); return broker.fetch(entry.source, url, init, signal); } });
         return { result };
       } finally { entry.running = false; }
-    });
+    }, sourceId);
   });
   app.post('/v1/asset', async (request, reply) => {
     if (!request.body || typeof request.body.sourceId !== 'string' || typeof request.body.url !== 'string' || request.body.url.length > 4096) throw bad('Expected sourceId and an asset URL');
-    const asset = await bounded(async () => {
+    const asset = await bounded(request, reply, async signal => {
       await registry.get(request.body.sourceId);
       const entry = registry.active(request.body.sourceId);
-      return broker.fetchAsset(entry.source, request.body.url, undefined, entry.imageRequestInit);
+      return broker.fetchAsset(entry.source, request.body.url, signal, entry.imageRequestInit);
     });
     reply.header('content-type', asset.contentType).header('x-content-type-options', 'nosniff'); return reply.send(asset.body);
   });

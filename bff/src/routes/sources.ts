@@ -1,11 +1,12 @@
 // Search across sources and add a new series to the library (queues its download). Backed by the source
 // adapters + the downloader. The cover proxy lives under /img (cookie auth) so <img> tags can load it.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { randomBytes } from 'node:crypto';
 import { authenticate, userIdOf, roleOf } from '../lib/auth';
 import { getSource, listSources, isSwAdapterId, SW_PREFIX, withTimeout } from '../lib/sources';
 import type { SourceAdapter, SourceSeries, SourceChapter } from '../lib/sources/types';
 import { downloadChapter, sanitize } from '../lib/downloader';
-import { noteChapterFailure } from '../lib/chapterFailures';
+import { isLocalDownloadQueueError, noteChapterFailure } from '../lib/chapterFailures';
 import { scanOrder } from '../lib/scanOrder';
 import { budgetFor } from '../lib/sources/budget';
 import { SOLVER_CONCURRENCY } from '../lib/sources/flaresolverr';
@@ -22,6 +23,8 @@ import { SOLVER_CONCURRENCY } from '../lib/sources/flaresolverr';
 const SCAN_CONCURRENCY = Math.max(1, Number(process.env.SCAN_CONCURRENCY || SOLVER_CONCURRENCY));
 const SCAN_ENOUGH = Math.max(1, Number(process.env.SCAN_ENOUGH || 3));
 const SCAN_SEARCH_MS = Number(process.env.SCAN_SEARCH_MS) || 45_000;
+const SOURCE_FANOUT_CONCURRENCY = 4;
+const SOURCE_FANOUT_BUDGET_MS = Math.max(1_000, Number(process.env.SOURCE_FANOUT_BUDGET_MS) || 45_000);
 import { persistScan, setBookDates } from '../lib/library';
 import { fetchAniListArt, fetchTrendingManhwa, TrendingItem } from '../lib/anilist';
 import { q, one } from '../lib/db';
@@ -42,12 +45,106 @@ const FILL_MAX_CHAPTERS = 300;
 import { logAudit } from '../lib/audit';
 import { env } from '../env';
 import { MangaImmediateError, openMangaChapter } from '../lib/mangaImmediate';
+import { isRequestQueueError, RequestQueueError } from '../lib/requestQueue';
+import { currentSourceRequest, withSourceRequests } from '../lib/sourceRequests';
 // The "already in library" annotation is deliberately library-wide: it answers "would adding this be a
 // duplicate on this server", which is a property of the server, not of the person asking.
 //
 // Which SOURCES you may reach is the opposite: entirely about who is asking, which is what `viewCtxFor` and
 // `sourceAllowedFor` answer.
 import { visibleToAll, viewCtxFor, sourceAllowedFor, browsable, Params, type ViewCtx, hideAdult } from '../lib/visibility';
+
+export interface SourceFanoutResult<T, R> {
+  values: R[];
+  failed: T[];
+  notTried: T[];
+  cancelled: boolean;
+}
+
+/**
+ * Feed a bounded number of source calls at a time and stop feeding when the request's wall budget expires.
+ * `notTried` includes work cancelled by that local deadline, because a continuation must retry it. A caller
+ * disconnect is different: there is no response to continue, so its abandoned tail is intentionally omitted.
+ */
+export async function boundedSourceFanout<T, R>(
+  items: T[],
+  run: (item: T, signal: AbortSignal) => Promise<R>,
+  opts: { concurrency?: number; budgetMs?: number; signal?: AbortSignal } = {},
+): Promise<SourceFanoutResult<T, R>> {
+  const concurrency = Math.max(1, Math.min(items.length || 1, Math.floor(opts.concurrency ?? SOURCE_FANOUT_CONCURRENCY)));
+  const budget = new AbortController();
+  const caller = opts.signal;
+  const onCallerAbort = () => budget.abort(caller?.reason);
+  if (caller?.aborted) onCallerAbort();
+  else caller?.addEventListener('abort', onCallerAbort, { once: true });
+  let wallExpired = false;
+  const timer = setTimeout(() => { wallExpired = true; budget.abort(new Error('source fan-out deadline')); }, opts.budgetMs ?? SOURCE_FANOUT_BUDGET_MS);
+
+  let next = 0;
+  const values = new Map<number, R>();
+  const failed = new Set<number>();
+  const deferred = new Set<number>();
+  const worker = async () => {
+    while (!budget.signal.aborted) {
+      const index = next++;
+      if (index >= items.length) return;
+      try {
+        const value = await run(items[index], budget.signal);
+        if (wallExpired) deferred.add(index);
+        else values.set(index, value);
+      } catch (error) {
+        if (wallExpired) deferred.add(index);
+        else if (isRequestQueueError(error) && error.code !== 'REQUEST_TIMEOUT') deferred.add(index);
+        else if (!caller?.aborted) failed.add(index);
+      }
+    }
+  };
+
+  try {
+    await Promise.all(Array.from({ length: concurrency }, worker));
+  } finally {
+    clearTimeout(timer);
+    caller?.removeEventListener('abort', onCallerAbort);
+  }
+
+  const cancelled = !!caller?.aborted;
+  if (wallExpired) for (let index = next; index < items.length; index++) deferred.add(index);
+  return {
+    values: [...values].sort(([a], [b]) => a - b).map(([, value]) => value),
+    failed: [...failed].sort((a, b) => a - b).map((index) => items[index]),
+    notTried: cancelled ? [] : [...deferred].sort((a, b) => a - b).map((index) => items[index]),
+    cancelled,
+  };
+}
+
+interface SearchCursor { q: string; remaining: string[]; expiresAt: number }
+const SEARCH_CURSOR_TTL = 15 * 60_000;
+const SEARCH_CURSOR_LIMIT = 128;
+const searchCursors = new Map<string, SearchCursor>();
+
+const pruneSearchCursors = (now = Date.now()): void => {
+  for (const [token, cursor] of searchCursors) if (cursor.expiresAt <= now) searchCursors.delete(token);
+};
+
+/** Store the unfinished source identities server-side so hundreds of extensions never inflate the GET URL. */
+export function encodeSearchCursor(query: string, remaining: string[]): string {
+  pruneSearchCursors();
+  while (searchCursors.size >= SEARCH_CURSOR_LIMIT) searchCursors.delete(searchCursors.keys().next().value!);
+  let token: string;
+  do token = randomBytes(18).toString('base64url'); while (searchCursors.has(token));
+  searchCursors.set(token, { q: query, remaining: [...new Set(remaining)], expiresAt: Date.now() + SEARCH_CURSOR_TTL });
+  return token;
+}
+
+export function decodeSearchCursor(cursor: string | undefined, query: string): string[] | null {
+  if (!cursor) return [];
+  pruneSearchCursors();
+  const stored = searchCursors.get(cursor);
+  return stored?.q === query ? [...stored.remaining] : null;
+}
+
+/** Test/process reset helper. */
+export function clearSearchCursors(): void { searchCursors.clear(); }
 
 interface Job {
   title: string; total: number; done: number;
@@ -162,9 +259,16 @@ async function seriesAndChapters(src: SourceAdapter, sourceId: string):
   // both `getSeries` and `listChapters` answer a timeout or a throw with null/[], which is exactly what a
   // title with genuinely nothing on it looks like.
   let failed = false;
+  const fallback = <T,>(value: T) => (error: unknown): T => {
+    // Local backpressure says nothing about this provider. Let the route present it as retryable instead of
+    // turning it into an empty source response or a health failure.
+    if (isRequestQueueError(error) && error.code !== 'REQUEST_TIMEOUT') throw error;
+    failed = true;
+    return value;
+  };
   const [series, chapters] = await Promise.all([
-    withTimeout(src.getSeries(sourceId), budgetFor(src, ADD_LOOKUP_TIMEOUT)).catch(() => { failed = true; return null; }),
-    withTimeout(src.listChapters(sourceId), budgetFor(src, ADD_LOOKUP_TIMEOUT)).catch(() => { failed = true; return [] as SourceChapter[]; }),
+    withTimeout(src.getSeries(sourceId), budgetFor(src, ADD_LOOKUP_TIMEOUT)).catch(fallback(null)),
+    withTimeout(src.listChapters(sourceId), budgetFor(src, ADD_LOOKUP_TIMEOUT)).catch(fallback([] as SourceChapter[])),
   ]);
   // Only a real answer is remembered. Caching the failure -- which this did when the cache was added -- turns
   // a hiccup into a confident "No readable chapters for this title on this source. Try a different source."
@@ -186,7 +290,13 @@ const chapterDto = (chapter: SourceChapter) => ({
   publishedAt: chapter.publishedAt || null,
 });
 const latestCache = new Map<string, { at: number; items: SourceSeries[] }>();
-const latestInflight = new Map<string, Promise<SourceSeries[]>>();
+interface LatestFlight {
+  promise: Promise<SourceSeries[]>;
+  controller: AbortController;
+  waiters: number;
+  settled: boolean;
+}
+const latestInflight = new Map<string, LatestFlight>();
 
 /**
  * One source's newest page, cached and de-duplicated.
@@ -201,15 +311,14 @@ const latestInflight = new Map<string, Promise<SourceSeries[]>>();
  */
 export type ListMode = 'latest' | 'popular';
 
-async function latestPage(src: SourceAdapter, page: number, mode: ListMode = 'latest'): Promise<SourceSeries[]> {
+export async function latestPage(src: SourceAdapter, page: number, mode: ListMode = 'latest'): Promise<SourceSeries[]> {
   // The mode belongs in the key. Without it the two listings share a cache entry and an in-flight promise,
   // so whichever is asked for first answers both -- Popular would serve Newest's results for ten minutes,
   // or the reverse, depending only on which the reader happened to open.
   const key = `${src.id}:${mode}:${page}`;
   const hit = latestCache.get(key);
   if (hit && Date.now() - hit.at < LATEST_TTL) return hit.items;
-  const flying = latestInflight.get(key);
-  if (flying) return flying;
+  let flight = latestInflight.get(key);
 
   const run = async (): Promise<SourceSeries[]> => {
     try {
@@ -247,6 +356,7 @@ async function latestPage(src: SourceAdapter, page: number, mode: ListMode = 'la
       // budget does not: it is counted, and at worst gets a short fixed breather. The escalating version
       // removed the very requests that would have shown it working, which is how a healthy source went
       // missing for a day while every diagnostic said it was fine.
+      if (isRequestQueueError(e) && e.code !== 'REQUEST_TIMEOUT') throw e;
       if ((e as { selfTimeout?: boolean })?.selfTimeout) {
         void reportSlow(src.id, (e as { ms?: number }).ms ?? LATEST_TIMEOUT);
       } else {
@@ -261,22 +371,50 @@ async function latestPage(src: SourceAdapter, page: number, mode: ListMode = 'la
     }
   };
 
-  // Registered before anything can await, and removed only if it is still the entry we put there.
-  const p = run();
-  latestInflight.set(key, p);
-  void p.finally(() => { if (latestInflight.get(key) === p) latestInflight.delete(key); });
-  return p;
+  if (!flight) {
+    const controller = new AbortController();
+    const created: LatestFlight = {
+      controller, waiters: 0, settled: false,
+      // A cache fill belongs to all waiters, so it must not inherit whichever HTTP request arrived first.
+      promise: withSourceRequests({ signal: controller.signal, priority: 'interactive' }, run),
+    };
+    flight = created;
+    latestInflight.set(key, created);
+    created.promise.then(
+      () => { created.settled = true; if (latestInflight.get(key) === created) latestInflight.delete(key); },
+      () => { created.settled = true; if (latestInflight.get(key) === created) latestInflight.delete(key); },
+    );
+  }
+
+  const waiterSignal = currentSourceRequest().signal;
+  flight.waiters++;
+  try {
+    if (!waiterSignal) return await flight.promise;
+    return await new Promise<SourceSeries[]>((resolve, reject) => {
+      const cancelled = () => reject(new RequestQueueError('CANCELLED', 'Request cancelled.'));
+      if (waiterSignal.aborted) return cancelled();
+      waiterSignal.addEventListener('abort', cancelled, { once: true });
+      flight!.promise.then(
+        (value) => { waiterSignal.removeEventListener('abort', cancelled); resolve(value); },
+        (error) => { waiterSignal.removeEventListener('abort', cancelled); reject(error); },
+      );
+    });
+  } finally {
+    flight.waiters--;
+    if (!flight.waiters && !flight.settled) flight.controller.abort();
+  }
+}
+
+/** Exposed for tests; listings and in-flight fills are process-global across route instances. */
+export function clearLatestCache(): void {
+  latestCache.clear();
+  for (const flight of latestInflight.values()) flight.controller.abort();
+  latestInflight.clear();
 }
 
 /** Whatever is on hand for this source and page, however old. Used when a source is in cooldown. */
 const cachedLatest = (id: string, page: number, mode: ListMode = 'latest'): SourceSeries[] =>
   latestCache.get(`${id}:${mode}:${page}`)?.items ?? [];
-
-/** Exposed for tests: the cache is process-global and would otherwise leak between cases. */
-export function clearLatestCache(): void {
-  latestCache.clear();
-  latestInflight.clear();
-}
 
 export interface AddResult {
   ok: boolean; status: number; error?: string; message?: string;
@@ -358,7 +496,23 @@ export async function addSeriesFromSource(opts: {
   const run = async (): Promise<AddResult> => {
     let firstPages = 0; let blockReason: string | null = null; let diskFull: string | null = null;
     try { const r = await downloadChapter({ sourceId: source!, seriesFolder: folder, chapter: selected[0], meta }); firstPages = r.skipped ? 1 : r.pages; }
-    catch (e: any) { blockReason = e?.blockStatus || null; diskFull = e?.diskFull ? String(e.message) : null; }
+    catch (e: any) {
+      if (isLocalDownloadQueueError(e)) {
+        if (opts.wait === false) {
+          const j = jobs.get(folder);
+          if (j) {
+            j.status = 'error';
+            j.reason = `${src.name} download paused while local capacity was unavailable. Retry this add shortly.`;
+            j.finishedAt = Date.now();
+          }
+        } else {
+          jobs.delete(folder);
+        }
+        throw e;
+      }
+      blockReason = e?.blockStatus || null;
+      diskFull = e?.diskFull ? String(e.message) : null;
+    }
     if (!firstPages) {
       // A full disk used to read as "this title may be licensed", which sends a person off to try another
       // source for a problem no source can fix.
@@ -402,6 +556,14 @@ export async function addSeriesFromSource(opts: {
           await downloadChapter({ sourceId: source!, seriesFolder: folder, chapter: ch, meta });
         } catch (e: any) {
           const j = jobs.get(folder);
+          if (isLocalDownloadQueueError(e)) {
+            if (j) {
+              j.status = 'error';
+              j.reason = `${src.name} download paused while local capacity was unavailable. Automatic updates can resume it, or use Find missing chapters; ${j.done} of ${j.total} chapters saved.`;
+              j.finishedAt = Date.now();
+            }
+            break;
+          }
           if (e?.blockStatus) {
             if (j) {
               j.status = 'error';
@@ -572,7 +734,10 @@ export default async function sourceRoutes(app: FastifyInstance) {
     const src = source ? getSource(source) : null;
     if (!src || !query?.trim()) return { content: [] };
     if (!sourceAllowedFor(src, vc(req).maxAgeRating)) return denySource(reply);
-    const raw = await src.search(query.trim()).catch(() => []);
+    const raw = await src.search(query.trim()).catch((error) => {
+      if (isRequestQueueError(error) && error.code !== 'REQUEST_TIMEOUT') throw error;
+      return [];
+    });
     // dedupe by sourceId (duplicate ids collide on the React key → wrong cover/title on a card)
     const seen = new Set<string>();
     const results = raw.filter((r) => !!r.sourceId && !seen.has(r.sourceId) && (seen.add(r.sourceId), true)).slice(0, 24);
@@ -638,33 +803,36 @@ export default async function sourceRoutes(app: FastifyInstance) {
       findOrder().filter((id) => allowed.has(id)).map((id) => getSource(id)).filter((x): x is NonNullable<typeof x> => !!x),
       ownSrc ? { id: ownSrc.id, lang: ownSrc.lang } : null,
     );
-    // A slot is held before the search starts, so the timeout measures the search and not the queue. The
-    // queue is FIFO, so relevance order is the order sources actually get asked in.
-    let inFlight = 0;
-    const waiting: Array<() => void> = [];
-    const slot = async () => { if (inFlight >= SCAN_CONCURRENCY) await new Promise<void>((r) => waiting.push(r)); inFlight++; };
-    const free = () => { inFlight--; waiting.shift()?.(); };
     const enough = () => found.filter((f) => !f.pinned).length >= SCAN_ENOUGH;
-    await Promise.all(order.map(async (id) => {
+    const searched = await boundedSourceFanout(order, async (id, signal) => {
       if (found.some((f) => f.source === id && f.pinned)) return;
-      await slot();
-      try {
-        const src = getSource(id);
-        if (!src || await isDisabled(id).catch(() => false)) return;
-        if (enough()) { notTried.push({ source: src.id, name: src.name }); return; }
-        let failed = false;
-        for (const term of terms) {
-          try {
-            const hit = pickBest(await withTimeout(src.search(term), budgetFor(src, SCAN_SEARCH_MS)), term);
-            if (hit?.sourceId) {
-              found.push({ source: src.id, name: src.name, sourceId: hit.sourceId, title: hit.title, coverUrl: hit.coverUrl, pinned: false });
-              return;
-            }
-          } catch { failed = true; /* one source failing is not the scan failing -- but it must not be silent */ }
+      const src = getSource(id);
+      if (!src || await isDisabled(id).catch(() => false)) return;
+      if (enough()) { notTried.push({ source: src.id, name: src.name }); return; }
+      let failed = false;
+      for (const term of terms) {
+        try {
+          const hit = await withSourceRequests({ signal, priority: 'interactive' }, async () =>
+            pickBest(await withTimeout(src.search(term), budgetFor(src, SCAN_SEARCH_MS)), term));
+          if (hit?.sourceId) {
+            found.push({ source: src.id, name: src.name, sourceId: hit.sourceId, title: hit.title, coverUrl: hit.coverUrl, pinned: false });
+            return;
+          }
+        } catch (error) {
+          if (isRequestQueueError(error) && error.code !== 'REQUEST_TIMEOUT') throw error;
+          failed = true; // one source failing is not the scan failing -- but it must not be silent
         }
-        if (failed) unreachable.push({ source: src.id, name: src.name });
-      } finally { free(); }
-    }));
+      }
+      if (failed) unreachable.push({ source: src.id, name: src.name });
+    }, {
+      concurrency: Math.min(SCAN_CONCURRENCY, SOURCE_FANOUT_CONCURRENCY),
+      budgetMs: SOURCE_FANOUT_BUDGET_MS,
+      signal: currentSourceRequest().signal,
+    });
+    for (const id of searched.notTried) {
+      const src = getSource(id);
+      if (src) notTried.push({ source: src.id, name: src.name });
+    }
 
     // Only now, and only for sources that produced a match, do we pay for a chapter list. Routed through the
     // shared lookup so it reuses whatever the add dialog already fetched.
@@ -673,7 +841,7 @@ export default async function sourceRoutes(app: FastifyInstance) {
     // One read for every source, rather than one blockedNow() per candidate: the same row answers "is it
     // in a cooldown" and "what is its record", and the record is what the dialog was never told.
     const health = new Map((await healthAll().catch(() => [])).map((h) => [h.source_id, h]));
-    await Promise.all(found.map(async (f) => {
+    const detailed = await boundedSourceFanout(found, async (f, signal) => {
       const src = getSource(f.source);
       if (!src) return;
       let list: SourceChapter[] = [];
@@ -681,8 +849,13 @@ export default async function sourceRoutes(app: FastifyInstance) {
       const h = health.get(f.source);
       if (h?.blocked_until && new Date(h.blocked_until).getTime() > Date.now()) why = 'blocked';
       else {
-        try { list = (await seriesAndChapters(src, f.sourceId)).chapters; }
-        catch { why = 'no_chapters'; }
+        try {
+          list = await withSourceRequests({ signal, priority: 'interactive' }, async () =>
+            (await seriesAndChapters(src, f.sourceId)).chapters);
+        } catch (error) {
+          if (isRequestQueueError(error) && error.code !== 'REQUEST_TIMEOUT') throw error;
+          why = 'no_chapters';
+        }
       }
       const nums = list.map((c) => c.number);
       const a = assess(have, nums);
@@ -698,7 +871,17 @@ export default async function sourceRoutes(app: FastifyInstance) {
           ? { status: h.status, consecutive: h.consecutive, lastFailAt: h.last_fail_at, lastOkAt: h.last_ok_at }
           : null,
       });
-    }));
+    }, {
+      concurrency: SOURCE_FANOUT_CONCURRENCY,
+      budgetMs: SOURCE_FANOUT_BUDGET_MS,
+      signal: currentSourceRequest().signal,
+    });
+    for (const f of detailed.notTried) {
+      if (!notTried.some((source) => source.source === f.source)) notTried.push({ source: f.source, name: f.name });
+    }
+    for (const f of detailed.failed) {
+      if (!unreachable.some((source) => source.source === f.source)) unreachable.push({ source: f.source, name: f.name });
+    }
 
     for (const u of notTried) {
       candidates.push({
@@ -726,6 +909,8 @@ export default async function sourceRoutes(app: FastifyInstance) {
       seriesId, title: s.title, folder: s.folder,
       have: { count: have.length, first: Math.min(...have), last: Math.max(...have) },
       gaps, candidates, planId: plan.id, expiresIn: PLAN_TTL,
+      partial: notTried.length > 0,
+      notTried: notTried.map((source) => source.source),
       refusal: gaps.length || candidates.some((c) => c.newer.length) ? null
         : { code: 'no_gaps', message: 'Nothing is missing between the chapters you already have.' },
     };
@@ -791,6 +976,14 @@ export default async function sourceRoutes(app: FastifyInstance) {
             if (j) { j.status = 'error'; j.reason = `Not enough free space: ${String(e.message)}. ${j.done} of ${j.total} chapters saved.`; j.finishedAt = Date.now(); }
             break;
           }
+          if (isLocalDownloadQueueError(e)) {
+            if (j) {
+              j.status = 'error';
+              j.reason = `${src.name} fill paused while local capacity was unavailable. Retry to continue; ${j.done} of ${j.total} chapters saved.`;
+              j.finishedAt = Date.now();
+            }
+            break;
+          }
           failures++;
           await noteChapterFailure({ seriesId: plan.seriesId, title: s.title, number: ch.number, sourceId: source, err: e });
           if (e?.blockStatus) {
@@ -814,19 +1007,28 @@ export default async function sourceRoutes(app: FastifyInstance) {
     return { ok: true, started: true, folder: s.folder, total: picked.length };
   });
 
-  app.get('/api/sources/search-all', async (req) => {
-    const term = ((req.query as { q?: string }).q || '').trim();
+  app.get('/api/sources/search-all', async (req, reply) => {
+    const { q: raw, cursor } = req.query as { q?: string; cursor?: string };
+    const term = (raw || '').trim();
     if (!term) return { content: [] };
     // Filtered rather than rejected: a fan-out has no single source to refuse, and a capped account asking
     // for a title that only exists on adult sources should get "nobody has it", not a partial denial.
     const allowed = new Set(reachable(req).map((x) => x.id));
-    const per = await Promise.all(findOrder().filter((id) => allowed.has(id)).map(async (id) => {
+    const order = findOrder().filter((id) => allowed.has(id));
+    const remaining = decodeSearchCursor(cursor, term);
+    if (remaining === null) return reply.code(400).send({ error: 'bad_cursor' });
+    // A cursor stores identities, never positions. Re-intersecting with today's authorized registry order
+    // handles removed sources and permission changes without skipping a different provider at the old index.
+    const wanted = new Set(remaining);
+    const pending = cursor ? order.filter((id) => wanted.has(id)) : order;
+    const fanout = await boundedSourceFanout(pending, async (id, signal) => {
       const src = getSource(id);
-      if (!src) return [];
-      if (await isDisabled(id).catch(() => false)) return [];
-      try { return (await withTimeout(src.search(term), budgetFor(src, 20000))).slice(0, 12).map((r) => ({ ...r, name: src.name })); }
-      catch { return []; }
-    }));
+      if (!src || await isDisabled(id).catch(() => false)) return { id, results: [] };
+      const results = await withSourceRequests({ signal, priority: 'interactive' }, async () =>
+        (await withTimeout(src.search(term), budgetFor(src, 20000))).slice(0, 12).map((r) => ({ ...r, name: src.name })));
+      return { id, results };
+    }, { concurrency: SOURCE_FANOUT_CONCURRENCY, budgetMs: SOURCE_FANOUT_BUDGET_MS, signal: currentSourceRequest().signal });
+    const per = fanout.values.map((value) => value.results);
     // group by normalized title → one card that carries every provider offering it (preferred order preserved)
     const groups = new Map<string, { title: string; coverUrl?: string; updatedAt?: string; providers: { source: string; name: string; sourceId: string; coverUrl?: string; title: string }[] }>();
     for (const list of per) for (const r of list) {
@@ -846,7 +1048,13 @@ export default async function sourceRoutes(app: FastifyInstance) {
       .map((g) => ({ ...g, inLibrary: have.has(norm(g.title)) }))
       .sort((a, b) => b.providers.length - a.providers.length)
       .slice(0, 30);
-    return { content: out };
+    return {
+      content: out,
+      partial: fanout.notTried.length > 0 || fanout.failed.length > 0,
+      notTried: fanout.notTried,
+      failed: fanout.failed,
+      nextCursor: fanout.notTried.length ? encodeSearchCursor(term, fanout.notTried) : null,
+    };
   });
 
   // Browse a source's newest / recently-updated series (no query). Same card shape as search.
@@ -979,20 +1187,33 @@ export default async function sourceRoutes(app: FastifyInstance) {
     // one tap. The client already knows which sources the reader is browsing and passes them.
     const wanted = sources ? new Set(sources.split(',').map((x) => x.trim()).filter(Boolean)) : null;
     const allowed = new Set(reachable(req).map((x) => x.id));
-    const found = await Promise.all(
-      findOrder().filter((id) => allowed.has(id) && (!wanted || wanted.has(id))).map(async (id) => {
+    const eligible = findOrder().filter((id) => allowed.has(id) && (!wanted || wanted.has(id)));
+    const fanout = await boundedSourceFanout(
+      eligible,
+      async (id, signal) => {
         const src = getSource(id);
         if (!src) return null;
         // search-all and latest both skip disabled sources and this did not, so it offered a provider an
         // admin had switched off and the add then failed with "disabled by the admin".
         if (await isDisabled(id).catch(() => false)) return null;
         try {
-          const best = pickBest(await withTimeout(src.search(term), budgetFor(src, 25000)), term);
+          const best = await withSourceRequests({ signal, priority: 'interactive' }, async () =>
+            pickBest(await withTimeout(src.search(term), budgetFor(src, 25000)), term));
           return best ? { source: id, name: src.name, sourceId: best.sourceId, title: best.title, coverUrl: best.coverUrl } : null;
-        } catch { return null; }
-      }),
+        } catch (error) {
+          // A null is reserved for a successful search with no matching title. Keep provider failures
+          // separate so the dialog can distinguish "does not carry it" from "could not be checked".
+          throw error;
+        }
+      },
+      { concurrency: SOURCE_FANOUT_CONCURRENCY, budgetMs: SOURCE_FANOUT_BUDGET_MS, signal: currentSourceRequest().signal },
     );
-    return { content: found.filter(Boolean) };
+    return {
+      content: fanout.values.filter(Boolean),
+      partial: fanout.notTried.length > 0 || fanout.failed.length > 0,
+      notTried: fanout.notTried,
+      failed: fanout.failed,
+    };
   });
 
   // Detail for one provider's match: description + chapter count/range (drives the add dialog).

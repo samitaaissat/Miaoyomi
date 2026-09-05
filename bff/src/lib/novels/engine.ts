@@ -1,6 +1,7 @@
 import { env } from '../../env';
 import { NovelError, type NovelEngine, type EngineSource } from './apiTypes';
 import { sourceUrl } from './catalog';
+import { sourceRequestSignal } from '../sourceRequests';
 
 /** Plugin paths may be opaque API IDs. Only an absent resolver permits the ordinary URL fallback. */
 export async function resolveSourceUrl(engine: NovelEngine, source: EngineSource, path: string, isNovel: boolean): Promise<string> {
@@ -24,7 +25,8 @@ export function createNovelEngine(base = env.NOVEL_ENGINE_URL, token = env.NOVEL
       response = await fetch(base.replace(/\/$/, '') + path, {
         method: body === undefined ? 'GET' : 'POST',
         headers: {authorization: `Bearer ${token}`, 'content-type': 'application/json'},
-        body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(90_000),
+        // Covers the engine's 30s queue wait plus its 110s browser-backed invocation deadline.
+        body: body === undefined ? undefined : JSON.stringify(body), signal: sourceRequestSignal(150_000),
       });
     } catch {
       throw new NovelError(503, 'engine_unavailable', 'The novel source service is unavailable. Try again shortly.');

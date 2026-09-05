@@ -20,7 +20,7 @@ test('unconfigured: reports off and does not throw', async () => {
     return [];
   });
   assert.equal(called, false, 'it tried to contact an extension server that was never configured');
-  assert.deepEqual(r, { configured: false, reachable: false, available: 0, registered: 0, skipped: 0 });
+  assert.deepEqual(r, { configured: false, reachable: false, available: 0, registered: 0 });
 });
 
 test('unconfigured: the client refuses rather than fetching a bad URL', async () => {

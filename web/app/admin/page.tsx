@@ -457,9 +457,9 @@ function Providers() {
   const toast = useToast();
   const qc = useQueryClient();
   const { data: srcs } = useQuery({ queryKey: ['sources'], queryFn: () => api<{ content: any[] }>('/api/sources') });
-  const { data: health } = useQuery({ queryKey: ['admin-sources'], queryFn: () => api<{ content: any[] }>('/api/admin/sources'), refetchInterval: 10000 });
+  const { data: health } = useQuery({ queryKey: ['admin-sources'], queryFn: () => api<{ content: any[]; requests?: { active: number; queued: number; concurrency: number; maxQueued: number } }>('/api/admin/sources'), refetchInterval: 10000 });
   const hmap = new Map((health?.content || []).map((h) => [h.source_id, h]));
-  const act = async (id: string, action: string, ok: string) => { try { await api(`/api/admin/sources/${id}/${action}`, { method: 'POST' }); toast(ok, 'success'); qc.invalidateQueries({ queryKey: ['admin-sources'] }); qc.invalidateQueries({ queryKey: ['sources'] }); } catch { toast('Failed', 'error'); } };
+  const act = async (id: string, action: string, ok: string) => { try { await api(`/api/admin/sources/${id}/${action}`, { method: 'POST' }); toast(ok, 'success'); qc.invalidateQueries({ queryKey: ['admin-sources'] }); qc.invalidateQueries({ queryKey: ['sources'] }); } catch (error) { toast(msgOf(error, 'Could not update source'), 'error'); } };
   const { data: custom } = useQuery({ queryKey: ['admin-custom'], queryFn: () => api<{ content: any[] }>('/api/admin/sources/custom') });
   const customIds = new Set((custom?.content || []).map((c: any) => c.id));
   const [reloading, setReloading] = useState(false);
@@ -506,8 +506,10 @@ function Providers() {
     try {
       const r = await api<any>('/api/admin/sources/check', { method: 'POST' });
       setSweep(r);
-      toast(r.needsAttention.length ? `${r.needsAttention.length} source(s) need attention` : 'All sources healthy',
-        r.needsAttention.length ? 'error' : 'success');
+      const deferred = r.sources.filter((source: any) => source.deferred).length;
+      toast(r.needsAttention.length ? `${r.needsAttention.length} source(s) need attention`
+        : deferred ? `${deferred} source check(s) deferred; retry when less busy` : 'All sources healthy',
+        r.needsAttention.length || deferred ? 'error' : 'success');
       inval();
     } catch (e: any) { toast(msgOf(e, 'Could not run the check'), 'error'); }
     setChecking(false);
@@ -590,6 +592,7 @@ function Providers() {
     <div className="board">
       <div className="full flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-fog-400">{list.length} source{list.length === 1 ? '' : 's'} installed</p>
+        {health?.requests && <p className="text-xs text-fog-500">Manga requests: {health.requests.active}/{health.requests.concurrency} active · {health.requests.queued}/{health.requests.maxQueued} waiting</p>}
         <div className="flex gap-1.5">
           {/* The same sweep that runs daily on its own, so what you see here is what happens unattended. */}
           <button onClick={checkAll} disabled={checking} className="chip shrink-0 text-xs disabled:opacity-50">
@@ -605,6 +608,7 @@ function Providers() {
             {sweep.needsAttention.length
               ? ` ${sweep.needsAttention.length} need${sweep.needsAttention.length === 1 ? 's' : ''} attention.`
               : ' Nothing needs attention.'}
+            {sweep.sources.some((v: any) => v.deferred) && ` ${sweep.sources.filter((v: any) => v.deferred).length} check(s) deferred while requests were busy.`}
           </p>
           {sweep.sources.filter((v: any) => v.action).map((v: any) => (
             <p key={v.id} className="mt-1 text-[11px] text-emerald-300">✓ {v.name}: followed its move to a new address</p>

@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { ART } from '@/lib/art';
 import { relativeTime } from '@/lib/format';
 import { useAuth, canDownload } from '@/lib/auth';
@@ -96,8 +96,15 @@ export default function DiscoverPage() {
   const [states, setStates] = useState<Record<string, SrcState>>({});
   const [searchHits, setSearchHits] = useState<SourceItem[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searchedTerm, setSearchedTerm] = useState('');
+  const [searchCursor, setSearchCursor] = useState<string | null>(null);
+  const [searchRemaining, setSearchRemaining] = useState(0);
+  const [searchFailed, setSearchFailed] = useState(0);
   const [seed, setSeed] = useState<AddSeed | null>(null);
   const [added, setAdded] = useState<Set<string>>(new Set());
+  const groupsRef = useRef<Record<string, SearchGroup['providers']>>({});
+  const searchAbort = useRef<AbortController | null>(null);
+  useEffect(() => () => { searchAbort.current?.abort(); }, []);
 
   // Ranked once; how many of them are actually asked grows as answers come back.
   // A source that cannot answer the chosen listing is not ranked at all, the same way one without `latest`
@@ -174,24 +181,77 @@ export default function DiscoverPage() {
   const nameOf = useCallback((id: string) => sources.find((s) => s.id === id)?.name, [sources]);
   const pending = mode === 'newest' ? Math.max(0, budget.length - settled) : (searching ? 3 : 0);
 
-  const search = async (e?: React.FormEvent) => {
+  const search = async (e?: React.FormEvent, continuation?: string) => {
     e?.preventDefault();
-    const term = q.trim();
+    const term = continuation ? searchedTerm : q.trim();
     if (!term) return;
-    setMode('search'); setSearching(true); setSearchHits([]);
+    searchAbort.current?.abort();
+    const controller = new AbortController();
+    searchAbort.current = controller;
+    setMode('search'); setSearching(true);
+    if (!continuation) {
+      setSearchedTerm(term);
+      setSearchHits([]);
+      setSearchCursor(null);
+      setSearchRemaining(0);
+      setSearchFailed(0);
+      groupsRef.current = {};
+    }
     try {
-      const r = await api<{ content: SearchGroup[] }>(`/api/sources/search-all?q=${encodeURIComponent(term)}`);
-      setSearchHits((r.content ?? []).map((g) => ({
-        source: g.providers[0]?.source ?? '', sourceId: g.providers[0]?.sourceId ?? g.title,
-        title: g.title, coverUrl: g.coverUrl, updatedAt: g.updatedAt,
-        inLibrary: g.inLibrary, providerCount: g.providers.length,
-      })));
-      (r.content ?? []).forEach((g) => { (groupsRef.current as any)[norm(g.title)] = g.providers; });
-    } catch { toast(tr('Search failed'), 'error'); }
-    setSearching(false);
+      const path = `/api/sources/search-all?q=${encodeURIComponent(term)}` +
+        (continuation ? `&cursor=${encodeURIComponent(continuation)}` : '');
+      const r = await api<{
+        content: SearchGroup[]; nextCursor?: string | null; notTried?: string[]; failed?: string[];
+      }>(path, { signal: controller.signal });
+      if (controller.signal.aborted || searchAbort.current !== controller) return;
+      const incoming = r.content ?? [];
+      for (const group of incoming) {
+        const key = norm(group.title);
+        const combined = [...group.providers, ...(groupsRef.current[key] ?? [])];
+        groupsRef.current[key] = combined.filter((provider, index) =>
+          combined.findIndex((candidate) => candidate.source === provider.source) === index);
+      }
+      setSearchHits((previous) => {
+        const merged = new Map(previous.map((item) => [norm(item.title), item]));
+        for (const group of incoming) {
+          const key = norm(group.title);
+          const providers = groupsRef.current[key] ?? group.providers;
+          const prior = merged.get(key);
+          merged.set(key, {
+            source: providers[0]?.source ?? prior?.source ?? '',
+            sourceId: providers[0]?.sourceId ?? prior?.sourceId ?? group.title,
+            title: prior?.title ?? group.title,
+            coverUrl: prior?.coverUrl || group.coverUrl,
+            updatedAt: prior?.updatedAt || group.updatedAt,
+            inLibrary: prior?.inLibrary || group.inLibrary,
+            providerCount: providers.length,
+          });
+        }
+        return [...merged.values()].sort((a, b) => (b.providerCount ?? 0) - (a.providerCount ?? 0));
+      });
+      setSearchCursor(r.nextCursor ?? null);
+      setSearchRemaining(r.notTried?.length ?? 0);
+      setSearchFailed((previous) => (continuation ? previous : 0) + (r.failed?.length ?? 0));
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        if (continuation && error instanceof ApiError && error.status === 400) {
+          setSearchCursor(null); setSearchRemaining(0);
+          toast(tr('This search expired. Search again to refresh the results.'), 'error');
+        } else toast(tr('Search failed'), 'error');
+      }
+    } finally {
+      if (searchAbort.current === controller) {
+        searchAbort.current = null;
+        setSearching(false);
+      }
+    }
   };
-  const groupsRef = useRef<Record<string, SearchGroup['providers']>>({});
-  const backToNewest = () => { setQ(''); setMode('newest'); setSearchHits([]); };
+  const backToNewest = () => {
+    searchAbort.current?.abort();
+    searchAbort.current = null;
+    setQ(''); setMode('newest'); setSearchHits([]); setSearchCursor(null); setSearchRemaining(0); setSearchFailed(0); setSearching(false);
+    groupsRef.current = {};
+  };
 
   const open = (it: SourceItem) => {
     if (it.inLibrary || added.has(norm(it.title))) return;
@@ -350,9 +410,23 @@ export default function DiscoverPage() {
           {mode === 'search' ? tr('Results across your sources') : tr('Newest from your sources')}
         </h2>
         {mode === 'search' ? (
-          <button onClick={backToNewest} className="chip shrink-0 text-xs">
-            <IcChevronLeft width={13} height={13} />{tr('Newest')}
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            {searchFailed > 0 && (
+              <span className="text-xs text-amber-300">
+                {tr('{count} sources unavailable', { count: searchFailed })}
+              </span>
+            )}
+            {searchCursor && (
+              <button onClick={() => search(undefined, searchCursor)} disabled={searching} className="chip text-xs disabled:opacity-50">
+                {searching ? tr('Searching…') : searchRemaining
+                  ? tr('Search {count} remaining sources', { count: searchRemaining })
+                  : tr('Search remaining sources')}
+              </button>
+            )}
+            <button onClick={backToNewest} className="chip text-xs">
+              <IcChevronLeft width={13} height={13} />{tr('Newest')}
+            </button>
+          </div>
         ) : budget.length > 0 && settled < budget.length ? (
           <span className="shrink-0 text-xs tabular-nums text-fog-500">
             {tr('{done} of {total} sources', { done: settled, total: budget.length })}
@@ -374,7 +448,9 @@ export default function DiscoverPage() {
       {!wall.length && !pending && (
         <div className="card col-span-full mt-2 p-8 text-center">
           <p className="text-sm text-fog-400">
-            {mode === 'search' ? tr('No results across your sources — try another title.')
+            {mode === 'search' ? searchCursor
+              ? tr('No matches yet — search the remaining sources.')
+              : tr('No results across your sources — try another title.')
               : budget.length === 0 ? tr('No sources are set up yet. Add one in Admin \u2192 Providers.')
               : Object.values(states).every((s) => s === 'blocked')
                 ? tr('No source could be reached right now.')

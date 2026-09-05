@@ -126,6 +126,10 @@ The application exposes its selected LAN port, normally **8080**. PostgreSQL and
 | `/opt/miaoyomi/releases` and `/opt/miaoyomi/current` | Versioned application builds and active release |
 | `/mnt/manga` | Optional existing collection from `--manga-mount`, read-only |
 
+Novel requests run with four workers and a bounded waiting queue by default. FlareSolverr uses at most two simultaneous novel solves and reuses up to four source/origin browser sessions. Idle sessions close after ten minutes. These defaults also apply after `miaoyomi update`; existing environment overrides are preserved. To tune a smaller or larger guest, set `NOVEL_ENGINE_CONCURRENCY`, `NOVEL_ENGINE_QUEUE_LIMIT`, or the `NOVEL_SOLVER_*` options in `/etc/miaoyomi/novel.env`, then run `rc-service miaoyomi-novel restart`. See the [novel engine limits](../novel-engine/README.md#network-and-execution-limits) for defaults and timeout budgets. Manga and legacy source requests share the solver service, so leave browser capacity for those consumers when raising novel limits.
+
+Manga sources have no count cap. Their shared request queue defaults to four active operations, two per source, and 128 waiting requests. Set `SOURCE_REQUEST_*` and legacy manga `SOLVER_*` options in `/etc/miaoyomi/app.env`, then run `rc-service miaoyomi restart`. See [source queue settings](extensions.md#settings). Previously disabled sources keep that choice; enable any you want in Providers.
+
 The installer does not recursively change ownership of an existing collection. A bind mount must already be readable by the app's UID **as mapped through the unprivileged LXC**. Inspect `pct config CTID` and the guest account IDs before applying permissions to a host dataset; do not assume an ID from a previous Compose deployment still applies. Keep the existing library read-only and give only the app's generated-book directories write access.
 
 Keep PostgreSQL on storage that supports reliable file locking and fsync. Keep generated EPUBs outside the manga scanner's directory. Device-offline books live in account-scoped browser storage and are independent of server files.

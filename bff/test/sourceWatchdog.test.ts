@@ -67,6 +67,19 @@ test('an unknown source or an unparseable url changes nothing', async () => {
   assert.deepEqual(h.writes, []);
 });
 
+test('local probe deferrals are represented without blaming the source', async () => {
+  const { deferredSourceVerdict } = await load();
+  const source = { id: 'busy', name: 'Busy source' } as any;
+  assert.deepEqual(
+    deferredSourceVerdict(source, { httpStatus: 0, deferred: true }, { ok: false, checks: [] }),
+    {
+      id: 'busy', name: 'Busy source', code: 'unknown', ok: false, deferred: true,
+      reason: 'Deferred because local request capacity was unavailable.', fix: '',
+    },
+  );
+  assert.equal(deferredSourceVerdict(source, undefined, { ok: false, checks: [] }), null);
+});
+
 // ---- one scheduler, not two --------------------------------------------------
 
 test('the watchdog does not update extensions', () => {

@@ -69,6 +69,8 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
   const [chapterId, setChapterId] = useState('');
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailRetry, setDetailRetry] = useState(0);
+  const [providerNotice, setProviderNotice] = useState<string | null>(null);
+  const [providerRetry, setProviderRetry] = useState(0);
   const title = seed.kind === 'result' ? seed.provider.title : seed.title;
 
   // Which request the state belongs to. Picking source A then B and having A land last used to overwrite B.
@@ -77,32 +79,42 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
   useEffect(() => {
     if (seed.kind !== 'trending') return;
     const mine = ++want.current;
-    setLoading(true);
-    api<{ content: Provider[] }>(`/api/sources/find?q=${encodeURIComponent(seed.title)}&sources=${encodeURIComponent(sources.join(','))}`)
-      .then((r) => { if (mine === want.current) { setProviders(r.content); if (r.content.length === 1) setPicked(r.content[0]); } })
-      .catch(() => { if (mine === want.current) setProviders([]); })
-      .finally(() => { if (mine === want.current) setLoading(false); });
-  }, [seed, sources]);
+    const controller = new AbortController();
+    setLoading(true); setProviderNotice(null);
+    api<{ content: Provider[]; partial?: boolean }>(`/api/sources/find?q=${encodeURIComponent(seed.title)}&sources=${encodeURIComponent(sources.join(','))}`, { signal: controller.signal })
+      .then((r) => { if (!controller.signal.aborted && mine === want.current) {
+        setProviders(r.content);
+        if (r.partial) setProviderNotice(tr('Some sources could not be checked. Try again for more results.'));
+        if (r.content.length === 1) setPicked(r.content[0]);
+      } })
+      .catch(() => { if (!controller.signal.aborted && mine === want.current) {
+        setProviders([]); setProviderNotice(tr('Could not check the sources. Try again.'));
+      } })
+      .finally(() => { if (!controller.signal.aborted && mine === want.current) setLoading(false); });
+    return () => controller.abort();
+  }, [seed, sources, providerRetry]);
 
   useEffect(() => {
     if (!picked) return;
     const mine = ++want.current;
+    const controller = new AbortController();
     setLoading(true); setDetail(null); setDetailError(null);
-    api<Detail>(`/api/sources/detail?source=${encodeURIComponent(picked.source)}&sourceId=${encodeURIComponent(picked.sourceId)}`)
+    api<Detail>(`/api/sources/detail?source=${encodeURIComponent(picked.source)}&sourceId=${encodeURIComponent(picked.sourceId)}`, { signal: controller.signal })
       .then((d) => {
-        if (mine === want.current) {
+        if (!controller.signal.aborted && mine === want.current) {
           setDetail(d);
           setCount(d.count);
           setChapterId(d.chapters[0]?.id || '');
         }
       })
       .catch((error) => {
-        if (mine === want.current) {
+        if (!controller.signal.aborted && mine === want.current) {
           setDetail(null);
           setDetailError(msgOf(error, tr('Could not load this title. Try again.')));
         }
       })
-      .finally(() => { if (mine === want.current) setLoading(false); });
+      .finally(() => { if (!controller.signal.aborted && mine === want.current) setLoading(false); });
+    return () => controller.abort();
   }, [picked, detailRetry]);
 
   // Only while the dialog is showing a live download.
@@ -196,10 +208,14 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
   if (!picked) {
     return (
       <Modal title={title} onClose={onClose}>
+        {!loading && providerNotice && <div className="mb-3 text-sm text-amber-300" role="status">
+          <p>{providerNotice}</p>
+          <button className="btn-ghost mt-2" onClick={() => setProviderRetry((value) => value + 1)}>{tr('Try again')}</button>
+        </div>}
         {loading ? (
           <p className="py-8 text-center text-sm text-fog-500">{tr('Searching…')}</p>
         ) : !providers?.length ? (
-          <p className="py-8 text-center text-sm text-fog-500">{tr('Not found on any source yet — try searching manually.')}</p>
+          providerNotice ? null : <p className="py-8 text-center text-sm text-fog-500">{tr('Not found on any source yet — try searching manually.')}</p>
         ) : (
           <>
             <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-fog-500">{tr('Available on — pick a source')}</p>

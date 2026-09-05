@@ -67,9 +67,17 @@ const schema = z.object({
   NOVEL_LIBRARY_PATH: z.string().default('/novels'),
   SUWAYOMI_USERNAME: z.string().default(''),
   SUWAYOMI_PASSWORD: z.string().default(''),
-  // Suwayomi can expose hundreds of sources; cross-source search fans out to every REGISTERED source, so
-  // registration is opt-in per source and additionally capped here.
-  SUWAYOMI_MAX_SOURCES: z.coerce.number().int().min(1).max(500).default(25),
+  // Limit active requests and waiting work, independently of how many sources are selected.
+  SOURCE_REQUEST_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(4),
+  SOURCE_REQUEST_PER_SOURCE: z.coerce.number().int().min(1).max(16).default(2),
+  SOURCE_REQUEST_QUEUE_LIMIT: z.coerce.number().int().min(0).max(4096).default(128),
+  SOURCE_REQUEST_QUEUE_PER_SOURCE: z.coerce.number().int().min(0).max(512).default(32),
+  SOURCE_REQUEST_QUEUE_WAIT_MS: z.coerce.number().int().min(1).max(300000).default(30000),
+  SOURCE_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1).max(300000).default(30000),
+  SOLVER_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(2),
+  SOLVER_QUEUE_LIMIT: z.coerce.number().int().min(0).max(1024).default(64),
+  SOLVER_QUEUE_TIMEOUT_MS: z.coerce.number().int().min(1).max(300000).default(30000),
+  SOLVER_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1).max(300000).default(95000),
   // How long one source gets to answer "what is new" on Discover. This handler was the only one of its
   // siblings with no bound of its own and inherited the adapter's -- 30s for Suwayomi, 95s for a
   // FlareSolverr-backed site -- so a single slow source stalled the whole wall for over a minute. Settable

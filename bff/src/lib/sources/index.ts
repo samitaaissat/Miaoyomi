@@ -10,6 +10,7 @@ export { listRemoteSources, swAdapterId, isSwAdapterId, SW_PREFIX } from './suwa
 export { suwayomiConfigured, aboutServer as suwayomiAbout } from './suwayomi/client';
 export { detectEngine } from './detect';
 export * from './types';
+import { setRequestTimeout } from '../requestQueue';
 
 /**
  * Give up after `ms`, and be honest about who gave up.
@@ -20,9 +21,11 @@ export * from './types';
  * budget, vanished from Discover entirely while every check reported it healthy. Being slower than our own
  * patience is not a fault of the source, and the caller now has a way to tell the difference.
  */
-export const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
-  Promise.race([
-    p,
-    new Promise<T>((_, rej) =>
-      setTimeout(() => rej(Object.assign(new Error(`timeout after ${ms}ms`), { selfTimeout: true, ms })), ms)),
-  ]);
+export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  if (setRequestTimeout(p, ms)) return p;
+  // Compatibility for unmanaged promises: clear the losing timer instead of retaining it until expiry.
+  let timer: NodeJS.Timeout;
+  return Promise.race([p, new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error(`timeout after ${ms}ms`), { selfTimeout: true, ms })), ms);
+  })]).finally(() => clearTimeout(timer));
+}

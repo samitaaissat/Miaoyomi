@@ -138,6 +138,13 @@ test('solver failures, empty output, unsolved challenges and limits cannot becom
     await assert.rejects(broker.fetch(source, source.site), e => e.code === code, code);
   }
 });
+test('FlareSolverr HTTP failures retain the solver message needed to diagnose a challenge', async () => {
+  const broker = new NetworkBroker({
+    lookup: publicDns, solverUrl: 'http://solver:8191', transport: async () => challenge(),
+    solverFetch: async () => Response.json({ status: 'error', message: 'Error solving the challenge: browser disconnected' }, { status: 500 }),
+  });
+  await assert.rejects(broker.fetch(source, source.site), e => e.code === 'SOLVER_UNAVAILABLE' && /browser disconnected/.test(e.message));
+});
 test('explicit browser requests do not reinterpret JSON POST or HEAD as a GET', async () => {
   const broker = new NetworkBroker({ lookup: publicDns, solverUrl: 'http://solver:8191', transport: async () => challenge(), solverFetch: async () => { throw Error('Must not change the method or media type'); } });
   for (const init of [{ method: 'HEAD' }, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"page":1}' }]) {
@@ -214,14 +221,197 @@ test('solver work aborts at the parent deadline and binary assets stay on the pi
   assert.equal(signal.aborted, true);
   await assert.rejects(broker.fetchAsset(source, source.site + 'cover.png'), e => e.code === 'SITE_CHALLENGE');
 });
-test('novel solver concurrency is bounded even when a plugin fans out requests', async () => {
+test('novel solver concurrency queues bounded work instead of rejecting the next request', async () => {
   let started; let finish; let calls = 0;
   const began = new Promise(resolve => { started = resolve; });
-  const broker = new NetworkBroker({ lookup: publicDns, solverUrl: 'http://solver:8191', solverConcurrency: 1, solverFetch: async () => { if (++calls > 1) return solved(); started(); return new Promise(resolve => { finish = resolve; }); } });
+  const broker = new NetworkBroker({ lookup: publicDns, solverUrl: 'http://solver:8191', solverConcurrency: 1, solverQueueLimit: 1, solverFetch: async () => {
+    if (++calls > 1) return solved();
+    started();
+    return new Promise(resolve => { finish = resolve; });
+  } });
   const first = broker.fetch(source, source.site, { useWebView: true });
   await began;
-  try { await assert.rejects(broker.fetch(source, source.site, { useWebView: true }), e => e.code === 'SOLVER_BUSY'); }
-  finally { finish(solved()); await first; }
+  const second = broker.fetch(source, source.site + 'next', { useWebView: true });
+  await assert.rejects(broker.fetch(source, source.site + 'overflow', { useWebView: true }), e => e.code === 'SOLVER_BUSY');
+  assert.equal(calls, 1, 'queued work started before capacity was released');
+  finish(solved());
+  await Promise.all([first, second]);
+  assert.equal(calls, 2);
+});
+test('queued solver work is removed when its request deadline is cancelled', async () => {
+  let started; let finish; let calls = 0;
+  const began = new Promise(resolve => { started = resolve; });
+  const broker = new NetworkBroker({ lookup: publicDns, solverUrl: 'http://solver:8191', solverConcurrency: 1, solverQueueLimit: 2, solverFetch: async () => {
+    calls++;
+    started();
+    return new Promise(resolve => { finish = resolve; });
+  } });
+  const first = broker.fetch(source, source.site, { useWebView: true });
+  await began;
+  const controller = new AbortController();
+  const queued = broker.fetch(source, source.site + 'queued', { useWebView: true }, controller.signal);
+  let settled = false; queued.then(() => { settled = true; }, () => { settled = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settled, false, 'the request was rejected instead of waiting for solver capacity');
+  controller.abort();
+  await assert.rejects(queued, e => e.code === 'DEADLINE');
+  finish(solved());
+  await first;
+  assert.equal(calls, 1, 'cancelled queued work reached FlareSolverr');
+});
+test('queued solver work fails after the configured bounded wait', async () => {
+  let started; let finish;
+  const began = new Promise(resolve => { started = resolve; });
+  const broker = new NetworkBroker({
+    lookup: publicDns, solverUrl: 'http://solver:8191', solverConcurrency: 1, solverQueueTimeoutMs: 10,
+    solverFetch: async (_url, init) => {
+      if (JSON.parse(init.body).cmd === 'sessions.destroy') return Response.json({ status: 'ok' });
+      started(); return new Promise(resolve => { finish = resolve; });
+    },
+  });
+  const first = broker.fetch(source, source.site, { useWebView: true });
+  await began;
+  await assert.rejects(broker.fetch(source, source.site + 'queued', { useWebView: true }), e => e.code === 'SOLVER_BUSY' && /timed out/.test(e.message));
+  finish(solved()); await first; await broker.close();
+});
+test('solver browser sessions are reused per source and origin, then destroyed when idle', async () => {
+  const requests = [];
+  const broker = new NetworkBroker({
+    lookup: publicDns, solverUrl: 'http://solver:8191', solverSessionIdleMs: 15, solverSessionTtlMinutes: 15,
+    solverFetch: async (_url, init) => {
+      const payload = JSON.parse(init.body); requests.push(payload);
+      return payload.cmd === 'sessions.destroy'
+        ? Response.json({ status: 'ok', message: 'The session has been removed.' })
+        : solved({ url: payload.url });
+    },
+  });
+  await broker.fetch(source, source.site, { useWebView: true });
+  await broker.fetch(source, source.site + 'next', { useWebView: true });
+  const pageRequests = requests.filter(payload => payload.cmd === 'request.get');
+  assert.equal(typeof pageRequests[0].session, 'string');
+  assert.equal(pageRequests[1].session, pageRequests[0].session, 'same source and origin launched another browser');
+  assert.equal(pageRequests[0].session_ttl_minutes, 15);
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.deepEqual(requests.filter(payload => payload.cmd === 'sessions.destroy').map(payload => payload.session), [pageRequests[0].session]);
+});
+test('a failed browser session is retired before the next solve', async () => {
+  const requests = [];
+  const broker = new NetworkBroker({
+    lookup: publicDns, solverUrl: 'http://solver:8191',
+    solverFetch: async (_url, init) => {
+      const payload = JSON.parse(init.body); requests.push(payload);
+      if (payload.cmd === 'sessions.destroy') return Response.json({ status: 'ok' });
+      return requests.filter(request => request.cmd === 'request.get').length === 1
+        ? Response.json({ status: 'error', message: 'browser disconnected' }, { status: 500 })
+        : solved({ url: payload.url });
+    },
+  });
+  await assert.rejects(broker.fetch(source, source.site, { useWebView: true }), e => e.code === 'SOLVER_UNAVAILABLE');
+  await broker.fetch(source, source.site, { useWebView: true });
+  const pageRequests = requests.filter(payload => payload.cmd === 'request.get');
+  assert.notEqual(pageRequests[0].session, pageRequests[1].session);
+  assert.ok(requests.some(payload => payload.cmd === 'sessions.destroy' && payload.session === pageRequests[0].session));
+  await broker.close();
+});
+test('broker shutdown waits for an in-progress owned session cleanup', async () => {
+  let finishDestroy;
+  const broker = new NetworkBroker({
+    lookup: publicDns, solverUrl: 'http://solver:8191',
+    solverFetch: async (_url, init) => JSON.parse(init.body).cmd === 'sessions.destroy'
+      ? new Promise(resolve => { finishDestroy = resolve; })
+      : Response.json({ status: 'error', message: 'browser disconnected' }, { status: 500 }),
+  });
+  await assert.rejects(broker.fetch(source, source.site, { useWebView: true }), e => e.code === 'SOLVER_UNAVAILABLE');
+  let closed = false;
+  const closing = broker.close().then(() => { closed = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(closed, false);
+  finishDestroy(Response.json({ status: 'ok' }));
+  await closing;
+});
+test('solver browser session count is bounded and broker shutdown destroys owned sessions', async () => {
+  const requests = [];
+  const broker = new NetworkBroker({
+    lookup: publicDns, solverUrl: 'http://solver:8191', solverConcurrency: 1, solverSessionLimit: 1, solverSessionIdleMs: 60_000,
+    solverFetch: async (_url, init) => {
+      const payload = JSON.parse(init.body); requests.push(payload);
+      return payload.cmd === 'sessions.destroy'
+        ? Response.json({ status: 'ok', message: 'The session has been removed.' })
+        : solved({ url: payload.url });
+    },
+  });
+  await broker.fetch(source, source.site, { useWebView: true });
+  await broker.fetch({ ...source, id: 'second' }, source.site, { useWebView: true });
+  const pageRequests = requests.filter(payload => payload.cmd === 'request.get');
+  assert.notEqual(pageRequests[0].session, pageRequests[1].session);
+  assert.deepEqual(requests.filter(payload => payload.cmd === 'sessions.destroy').map(payload => payload.session), [pageRequests[0].session]);
+  await broker.close();
+  assert.deepEqual(requests.filter(payload => payload.cmd === 'sessions.destroy').map(payload => payload.session), [pageRequests[0].session, pageRequests[1].session]);
+});
+test('parallel challenges for one source and origin share one clearance solve', async () => {
+  let solves = 0;
+  let cleared = false;
+  const broker = new NetworkBroker({
+    lookup: publicDns, solverUrl: 'http://solver:8191', solverConcurrency: 2,
+    transport: async url => cleared ? response(200, { 'content-type': 'text/html' }, url.pathname) : challenge(),
+    solverFetch: async (_url, init) => {
+      const payload = JSON.parse(init.body);
+      assert.equal(payload.cmd, 'request.get');
+      solves++;
+      await new Promise(resolve => setTimeout(resolve, 10));
+      cleared = true;
+      return solved({ url: payload.url, cookies: [{ name: 'cf_clearance', value: 'guest', domain: 'fiction.example', path: '/' }] });
+    },
+  });
+  const [one, two] = await Promise.all([
+    broker.fetch(source, source.site + 'one', { headers: { accept: 'text/html' } }),
+    broker.fetch(source, source.site + 'two', { headers: { accept: 'text/html' } }),
+  ]);
+  assert.equal(one.body, '/one'); assert.equal(two.body, '/two');
+  assert.equal(solves, 1, 'the same challenge launched multiple browser solves');
+});
+test('a cancelled follower leaves a shared clearance solve running for other callers', async () => {
+  let cleared = false; let finish;
+  const began = Promise.withResolvers();
+  const broker = new NetworkBroker({
+    lookup: publicDns, solverUrl: 'http://solver:8191',
+    transport: async url => cleared ? response(200, {}, url.pathname) : challenge(),
+    solverFetch: async (_url, init) => {
+      const payload = JSON.parse(init.body);
+      if (payload.cmd === 'sessions.destroy') return Response.json({ status: 'ok' });
+      began.resolve();
+      return new Promise(resolve => { finish = () => { cleared = true; resolve(solved({ url: payload.url })); }; });
+    },
+  });
+  const owner = broker.fetch(source, source.site + 'one');
+  await began.promise;
+  const controller = new AbortController();
+  const follower = broker.fetch(source, source.site + 'two', {}, controller.signal);
+  await new Promise(resolve => setImmediate(resolve)); controller.abort();
+  await assert.rejects(follower, error => error instanceof Error && error.code === 'DEADLINE');
+  finish(); assert.equal((await owner).body, '/one');
+  await broker.close();
+});
+test('shared clearance never returns the first URL rendered body for a different URL', async () => {
+  let solves = 0;
+  const broker = new NetworkBroker({
+    lookup: publicDns, solverUrl: 'http://solver:8191', transport: async () => challenge(),
+    solverFetch: async (_url, init) => {
+      const payload = JSON.parse(init.body); solves++;
+      await new Promise(resolve => setTimeout(resolve, 10));
+      return solved({ url: payload.url, response: `<html><body>${payload.url}</body></html>` });
+    },
+  });
+  const results = await Promise.allSettled([
+    broker.fetch(source, source.site + 'one', { headers: { accept: 'text/html' } }),
+    broker.fetch(source, source.site + 'two', { headers: { accept: 'text/html' } }),
+  ]);
+  assert.equal(results[0].status, 'fulfilled');
+  assert.match(results[0].value.body, /\/one/);
+  assert.equal(results[1].status, 'rejected');
+  assert.equal(results[1].reason.code, 'SITE_CHALLENGE');
+  assert.equal(solves, 1);
+  await broker.close();
 });
 test('solver cookies retain browser expiry, host-only scope and source isolation', async () => {
   const broker = new NetworkBroker({ lookup: publicDns, solverUrl: 'http://solver:8191', solverFetch: async () => solved({ cookies: [

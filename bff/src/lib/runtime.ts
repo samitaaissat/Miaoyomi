@@ -9,7 +9,7 @@ export const runtime: {
   // nothing new.
   // `visited`/`stopped`: a sweep now has a budget and a disk floor, and a sweep that stopped early is a
   // different night from one that finished, even at the same +N.
-  lastUpdateResult: { series: number; visited?: number; added: number; failed?: number; chapterFailures?: number; healthy?: boolean; stopped?: 'budget' | 'disk' | 'shutdown' } | null;
+  lastUpdateResult: { series: number; visited?: number; added: number; failed?: number; chapterFailures?: number; healthy?: boolean; stopped?: 'budget' | 'disk' | 'queue' | 'shutdown' } | null;
   updating: boolean;
   /**
    * Set by SIGTERM/SIGINT. The updater's loops check it between chapters and between series, so a

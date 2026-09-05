@@ -38,6 +38,8 @@ const LIB = 'lib_fill', SERIES = 's_fill_1', FOLDER = 'Rich Source/Filled Series
 const RICH = 'fill-rich';      // has 1..10
 const POOR = 'fill-poor';      // has only 8..10, which is what our library was built from
 const WRONG = 'fill-wrong';    // a different series that numbers 1..3
+const QUEUE = 'fill-queue';              // local pressure on the first chapter
+const QUEUE_LATER = 'fill-queue-later';  // local pressure after one chapter lands
 const USER = 'fill-admin';
 let q: any, app: any, tok: string, uid: string;
 
@@ -80,10 +82,22 @@ before(async () => {
   registerAdapter(fake(RICH, 'Rich Source', [1,2,3,4,5,6,7,8,9,10,11], 'Filled Series Deluxe Edition') as any);
   registerAdapter(fake(POOR, 'Poor Source', [8,9,10,11], 'Filled Series') as any);
   registerAdapter(fake(WRONG, 'Wrong Source', [1,2,3], 'Filled Series') as any);
+  const { RequestQueueError } = await import('../src/lib/requestQueue');
+  registerAdapter({
+    ...fake(QUEUE, 'Queue Source', [1], 'Queue Series'),
+    async getPageUrls() { throw new RequestQueueError('QUEUE_FULL', 'download capacity is full'); },
+  } as any);
+  registerAdapter({
+    ...fake(QUEUE_LATER, 'Queue Later Source', [1, 2], 'Queue Later Series'),
+    async getPageUrls(chapterId: string) {
+      if (chapterId === 'c/2') throw new RequestQueueError('QUEUE_FULL', 'download capacity is full');
+      return ['https://example.invalid/p1.jpg'];
+    },
+  } as any);
 
   // A previous run's failed downloads leave these fakes marked blocked in source_health, and a blocked source
   // is (correctly) not offered -- which would make this file fail for a reason that has nothing to do with it.
-  await q('DELETE FROM source_health WHERE source_id = ANY($1)', [[RICH, POOR, WRONG]]);
+  await q('DELETE FROM source_health WHERE source_id = ANY($1)', [[RICH, POOR, WRONG, QUEUE, QUEUE_LATER]]);
 
   await q(`INSERT INTO libraries (id, name, path) VALUES ($1,'Fill',$1) ON CONFLICT (id) DO NOTHING`, [LIB]);
   await q(`DELETE FROM lib_series WHERE id = $1`, [SERIES]);
@@ -110,11 +124,13 @@ after(async () => {
   if (root) rmSync(root, { recursive: true, force: true });
   if (!DSN) return;
   await app?.close();
+  await q(`DELETE FROM lib_books WHERE series_id IN (SELECT id FROM lib_series WHERE folder LIKE 'Queue Source/%' OR folder LIKE 'Queue Later Source/%')`).catch(() => {});
+  await q(`DELETE FROM lib_series WHERE folder LIKE 'Queue Source/%' OR folder LIKE 'Queue Later Source/%'`).catch(() => {});
   await q('DELETE FROM lib_books WHERE series_id = $1', [SERIES]).catch(() => {});
   await q('DELETE FROM lib_series WHERE id = $1', [SERIES]).catch(() => {});
   await q('DELETE FROM libraries WHERE id = $1', [LIB]).catch(() => {});
   await q('DELETE FROM users WHERE username = $1', [USER]).catch(() => {});
-  await q('DELETE FROM source_health WHERE source_id = ANY($1)', [[RICH, POOR, WRONG]]).catch(() => {});
+  await q('DELETE FROM source_health WHERE source_id = ANY($1)', [[RICH, POOR, WRONG, QUEUE, QUEUE_LATER]]).catch(() => {});
 });
 
 const scan = (body: any = {}) =>
@@ -199,6 +215,69 @@ test('THE METADATA HAZARD: a fill must not rename the series', { skip }, async (
     'here would rename this series for everyone on the next persistScan.');
   assert.doesNotMatch(xml, /Deluxe/, 'not a trace of the candidate title may reach the archive');
   assert.match(xml, /Our summary/, 'and our summary, for the same reason');
+});
+
+test('detached add and fill stop as retryable when local download capacity is unavailable', { skip }, async (t) => {
+  const jobs = async () =>
+    (await app.inject({ method: 'GET', url: '/api/sources/jobs', headers: { authorization: tok } })).json().content;
+  const waitForError = async (folder: string) => {
+    for (let i = 0; i < 40; i++) {
+      const job = (await jobs()).find((candidate: any) => candidate.folder === folder);
+      if (job?.status === 'error') return job;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return (await jobs()).find((candidate: any) => candidate.folder === folder);
+  };
+
+  await t.test('add leaves a retryable job instead of reporting an undownloadable title', async () => {
+    const { addSeriesFromSource } = await import('../src/routes/sources');
+    const started = await addSeriesFromSource({ source: QUEUE, sourceId: 'queue-series', wait: false });
+    assert.equal(started.started, true);
+    const job = await waitForError('Queue Source/Queue Series');
+    assert.equal(job?.status, 'error');
+    assert.match(job?.reason || '', /local capacity.*Retry/i);
+  });
+
+  await t.test('an add paused after chapter one remains an error instead of being finalized as done', async () => {
+    const { addSeriesFromSource } = await import('../src/routes/sources');
+    const started = await addSeriesFromSource({ source: QUEUE_LATER, sourceId: 'queue-later-series', wait: false });
+    assert.equal(started.started, true);
+    const folder = 'Queue Later Source/Queue Later Series';
+    const job = await waitForError(folder);
+    assert.equal(job?.status, 'error');
+    assert.equal(job?.done, 1);
+    assert.equal(job?.total, 2);
+    assert.match(job?.reason || '', /local capacity.*(?:Automatic updates|Find missing chapters)/i);
+    const failures = await q(`SELECT cf.attempts FROM chapter_failures cf JOIN lib_series s ON s.id = cf.series_id
+      WHERE s.folder = $1 AND cf.number = 2`, [folder]);
+    assert.deepEqual(failures, []);
+  });
+
+  await t.test('fill leaves a retryable job and does not consume the permanent retry cap', async () => {
+    const { planKey, putPlan } = await import('../src/lib/fill');
+    const chapter = page(7);
+    const sourceSeriesId = 'queue-series';
+    const plan = putPlan({
+      seriesId: SERIES,
+      folder: FOLDER,
+      chapters: new Map([[planKey(QUEUE, sourceSeriesId), [chapter]]]),
+      candidates: [{
+        source: QUEUE, name: 'Queue Source', sourceSeriesId, title: 'Queue Series', count: 1,
+        first: 7, last: 7, coverage: 1, matched: 4, fillable: [7], newer: [], why: 'ok', pinned: false,
+      }],
+    });
+    await q('DELETE FROM chapter_failures WHERE series_id = $1 AND number = 7', [SERIES]);
+    const response = await app.inject({
+      method: 'POST', url: '/api/sources/fill', headers: { authorization: tok },
+      payload: { planId: plan.id, source: QUEUE, sourceSeriesId, numbers: [7] },
+    });
+    assert.equal(response.statusCode, 200, response.body);
+    const job = await waitForError(FOLDER);
+    assert.equal(job?.status, 'error');
+    assert.match(job?.reason || '', /local capacity.*Retry/i);
+    const failures = await q('SELECT attempts FROM chapter_failures WHERE series_id = $1 AND number = 7', [SERIES]);
+    assert.deepEqual(failures, []);
+  });
 });
 
 

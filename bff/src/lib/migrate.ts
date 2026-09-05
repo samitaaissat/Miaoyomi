@@ -538,8 +538,8 @@ UPDATE opds_tokens SET expires_at = now() + interval '1 year' WHERE expires_at I
 ALTER TABLE opds_tokens ADD COLUMN IF NOT EXISTS show_adult boolean NOT NULL DEFAULT false;
 
 -- Suwayomi-provided sources (one per source in an installed Mihon/Tachiyomi extension) that the operator
--- has switched on. Suwayomi may expose hundreds of them; only the enabled ones are registered as Uchiyomi
--- sources, because cross-source search fans out to every registered source.
+-- has selected. Selected adapters are registered so Providers can display them; source_health.disabled is
+-- the operator's independent runtime switch, while the request scheduler bounds outbound concurrency.
 CREATE TABLE IF NOT EXISTS suwayomi_sources (
   source_id text PRIMARY KEY,
   name      text NOT NULL,

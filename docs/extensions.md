@@ -87,9 +87,9 @@ Two things worth knowing:
   database loses the routing for those series (they stay in your library; re-adding repairs it). Don't delete
   its volume. The scheduled check will put your repositories and your installed extensions back, but it
   cannot restore that routing — nothing outside the engine ever knew those ids.
-- Every source you enable is queried on every cross-source search. Installing a handful is fine; installing
-  hundreds would make search slow and hammer a lot of sites at once. `SUWAYOMI_MAX_SOURCES` (default 25) is a
-  backstop, and it logs what it skipped rather than silently dropping it.
+- Installed sources stay visible in Providers. Cross-source work runs through a bounded request scheduler,
+  so adding a multilingual extension does not hide later extensions or fire every request at once. Disabling
+  a source in Providers remains an explicit operator choice and survives source reloads.
 
 ## Turning it off
 
@@ -102,11 +102,33 @@ reclaim the RAM as well, `docker compose stop uchiyomi-suwayomi` (`yomi-suwayomi
 | --- | --- | --- |
 | `SUWAYOMI_URL` | the bundled engine | Where the extension engine is. Empty turns the feature off. |
 | `SUWAYOMI_USERNAME` / `SUWAYOMI_PASSWORD` | empty | Only if your engine has authentication enabled. |
-| `SUWAYOMI_MAX_SOURCES` | `25` | Ceiling on how many extension sources register at once. |
+| `SOURCE_REQUEST_CONCURRENCY` | `4` | Maximum active manga adapter operations and image fetches, shared by browsing and downloads. |
+| `SOURCE_REQUEST_PER_SOURCE` | `2` | Maximum active operations for one source. |
+| `SOURCE_REQUEST_QUEUE_LIMIT` / `SOURCE_REQUEST_QUEUE_PER_SOURCE` | `128` / `32` | Maximum waiting operations overall and per source. |
+| `SOURCE_REQUEST_QUEUE_WAIT_MS` | `30000` | Maximum time waiting for a worker. |
+| `SOURCE_REQUEST_TIMEOUT_MS` | `30000` | Default execution deadline after acquiring a worker; source-specific deadlines take precedence. |
+| `SOURCE_LATEST_TIMEOUT_MS` | `8000` | Execution deadline for a source's Discover listing, excluding queue wait. |
+| `SOLVER_CONCURRENCY` / `SOLVER_QUEUE_LIMIT` | `2` / `64` | Active and waiting legacy manga browser solves. Novel solves use separate `NOVEL_SOLVER_*` settings. |
+| `SOLVER_QUEUE_TIMEOUT_MS` / `SOLVER_REQUEST_TIMEOUT_MS` | `30000` / `95000` | Waiting and execution deadlines for the legacy browser queue. |
 
 The update check's own settings live in **Admin → Server → Settings**, not here: *Update extensions
 automatically* (on by default) and *Extension check interval* (6 hours).
-| `SOURCE_LATEST_TIMEOUT_MS` | `8000` | How long one source gets to answer "what's new" on Discover before it is given up on and marked unhealthy. |
+There is no enabled-source count limit. `SUWAYOMI_MAX_SOURCES` is obsolete and ignored. Sources previously
+disabled remain disabled until you enable them in Providers. The scheduler rotates eligible sources and
+gives interactive requests priority; waiting background work ages into priority after five seconds. Closing
+or replacing an HTTP read cancels its waiting work and aborts supported transports. A plugin that ignores
+cancellation keeps its occupied worker until it finishes, preventing a timeout from exceeding concurrency.
+Queue overload and expiry return retryable errors without recording a source-health failure. Admin →
+Providers shows the active and waiting manga request counts.
+
+Large cross-source searches use four workers and a 45-second page budget. Results arrive with a
+continuation when more sources remain; **Search remaining sources** keeps the existing cards and checks
+the remaining providers. Sources that failed are reported separately from ones waiting for capacity.
+Search continuations expire after 15 minutes or an app restart; submit the search again to refresh them.
+
+The queues are in memory: a restart cancels them. They do not persist HTTP requests or automatically replay
+failed operations. Downloads retain their existing retry behavior for HTTP 429 responses. Their chapter
+gate also bounds waiting work (32 per source, 256 overall), with a five-minute waiting budget.
 
 **Adult sources.** Extensions declare whether they are adult, and Uchiyomi records that per source. A member
 whose age limit is set below 18 cannot reach one: it is left out of their source list entirely, and the

@@ -1,14 +1,11 @@
 // Register the Suwayomi sources the operator has switched on.
 //
-// Registration is opt-in per source, and that is not a preference — it is what keeps the feature usable.
-// GET /api/sources/search-all fans out to EVERY registered source with a 20s timeout each, so registering
-// the several hundred sources a full extension set exposes would make cross-source search unusable and
-// would hit every one of those sites at once.
+// Registration is opt-in per source. Every selected adapter stays available; outbound work is bounded by
+// the shared request scheduler instead of hiding sources from Providers.
 //
 // Everything here fails soft. Suwayomi being unset, down, or unauthorised must leave Uchiyomi booting and
 // working exactly as it does without it.
 import { q } from '../../db';
-import { env } from '../../../env';
 import { registerAdapter } from '../loader';
 import { listRemoteSources, makeSuwayomiAdapter, type RemoteSource } from './sources';
 import { suwayomiConfigured } from './client';
@@ -43,7 +40,6 @@ export interface LoadResult {
   reachable: boolean;
   available: number;
   registered: number;
-  skipped: number;
   error?: string;
 }
 
@@ -52,7 +48,7 @@ export interface LoadResult {
  * degrades to "no extension sources" instead of taking the server down with it.
  */
 export async function loadSuwayomiSources(list: () => Promise<RemoteSource[]> = listRemoteSources): Promise<LoadResult> {
-  if (!suwayomiConfigured()) return { configured: false, reachable: false, available: 0, registered: 0, skipped: 0 };
+  if (!suwayomiConfigured()) return { configured: false, reachable: false, available: 0, registered: 0 };
 
   let remote: RemoteSource[];
   try {
@@ -60,7 +56,7 @@ export async function loadSuwayomiSources(list: () => Promise<RemoteSource[]> = 
   } catch (e) {
     const msg = (e as Error)?.message || 'unreachable';
     console.warn(`[sources] suwayomi: could not list sources (${msg})`);
-    return { configured: true, reachable: false, available: 0, registered: 0, skipped: 0, error: msg };
+    return { configured: true, reachable: false, available: 0, registered: 0, error: msg };
   }
 
   await remember(remote);
@@ -68,21 +64,8 @@ export async function loadSuwayomiSources(list: () => Promise<RemoteSource[]> = 
   const wanted = remote.filter((s) => enabled.has(String(s.id)));
 
   let registered = 0;
-  let skipped = 0;
-  for (const s of wanted) {
-    // Cap registrations rather than silently letting search fan out forever. Say what was dropped.
-    if (registered >= env.SUWAYOMI_MAX_SOURCES) {
-      skipped++;
-      continue;
-    }
-    if (registerAdapter(makeSuwayomiAdapter(s))) registered++;
-  }
-  if (skipped) {
-    console.warn(
-      `[sources] suwayomi: registered ${registered} source(s); skipped ${skipped} over the SUWAYOMI_MAX_SOURCES limit of ${env.SUWAYOMI_MAX_SOURCES}`,
-    );
-  }
-  return { configured: true, reachable: true, available: remote.length, registered, skipped };
+  for (const s of wanted) if (registerAdapter(makeSuwayomiAdapter(s))) registered++;
+  return { configured: true, reachable: true, available: remote.length, registered };
 }
 
 /**

@@ -113,6 +113,25 @@ test('a chapter where nothing downloaded still reports as blocked', async () => 
   );
 });
 
+test('HTTP failures and HTML image responses are disposed before their queue slot is released', async () => {
+  let calls = 0;
+  let cancelled = 0;
+  globalThis.fetch = (async () => {
+    const status = calls++ % 2 ? 200 : 503;
+    return new Response(new ReadableStream({ cancel() { cancelled++; } }), {
+      status,
+      headers: status === 200 ? { 'content-type': 'text/html' } : undefined,
+    });
+  }) as typeof fetch;
+
+  await assert.rejects(
+    downloadChapter({ sourceId: 'test-partial', seriesFolder: 'T/Disposed', chapter: chapter(20) } as any),
+    /no images downloaded/,
+  );
+  assert.equal(calls, 5);
+  assert.equal(cancelled, 5, 'every unused response body was cancelled inside its transport slot');
+});
+
 /** Fails exactly the pages at `bad`, every time they are asked for. Everything else serves. */
 function serveExcept(bad: number[], status = 503) {
   const fail = new Set(bad);

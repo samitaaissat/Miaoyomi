@@ -12,6 +12,8 @@ import { classify, reportOk, reportFail, SourceStatus } from './sourceHealth';
 import { withGate } from './gate';
 import { imageExt } from './imageExt';
 import { writeAtomic } from './fsAtomic';
+import { isRequestQueueError } from './requestQueue';
+import { currentSourceRequest, runSourceRequest } from './sourceRequests';
 
 export function sanitize(s: string): string {
   return (s || '').replace(/[\/\\:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim().slice(0, 150) || 'untitled';
@@ -136,7 +138,12 @@ export async function downloadChapter(input: DownloadInput): Promise<{ file: str
   if (await stat(abs).then(() => true).catch(() => false)) return { file: rel, pages: 0, skipped: true };
   await assertFreeSpace();
 
-  return withGate(input.sourceId, () => fetchChapter(src, input, rel), { concurrency: DL_CONCURRENCY, minGapMs: DL_MIN_GAP_MS });
+  return withGate(input.sourceId, () => fetchChapter(src, input, rel), {
+    concurrency: DL_CONCURRENCY,
+    minGapMs: DL_MIN_GAP_MS,
+    maxWaitMs: 300_000,
+    signal: currentSourceRequest().signal,
+  });
 }
 
 async function fetchChapter(
@@ -149,6 +156,7 @@ async function fetchChapter(
   try {
     urls = await src.getPageUrls(input.chapter.sourceId);
   } catch (e) {
+    if (isRequestQueueError(e)) throw e;
     const s = classify(e);
     if (s) await reportFail(input.sourceId, s, (e as Error)?.message || 'getPageUrls failed');
     throw e;
@@ -184,27 +192,35 @@ async function fetchChapter(
     // capability rather than keyed off the adapter id, so the core never special-cases a particular source.
     Object.assign(headers, typeof src.imageHeaders === 'function' ? src.imageHeaders(u) : src.imageHeaders ?? {});
     try {
-      const r = await fetch(u, { headers, signal: AbortSignal.timeout(45000) });
-      if (!r.ok) {
-        if (r.status >= 400) worst = Math.max(worst, r.status);
-        // A 429 is the site asking for room, and the rest of this chapter is another hundred requests it did
-        // not ask for. Note it (and any Retry-After it sent) so the burst can stop instead of finishing the
-        // loop and collecting a hundred more of them, which is how 12 of 108 pages arrived.
-        if (r.status === 429) {
-          const ra = Number(r.headers.get('retry-after'));
-          retryAfterMs = Math.max(retryAfterMs, Number.isFinite(ra) && ra > 0 ? Math.min(ra, 120) * 1000 : 5000);
+      await runSourceRequest(input.sourceId, async signal => {
+        const r = await fetch(u, { headers, signal });
+        if (!r.ok) {
+          if (r.status >= 400) worst = Math.max(worst, r.status);
+          // A 429 is the site asking for room, and the rest of this chapter is another hundred requests it did
+          // not ask for. Note it (and any Retry-After it sent) so the burst can stop instead of finishing the
+          // loop and collecting a hundred more of them, which is how 12 of 108 pages arrived.
+          if (r.status === 429) {
+            const ra = Number(r.headers.get('retry-after'));
+            retryAfterMs = Math.max(retryAfterMs, Number.isFinite(ra) && ra > 0 ? Math.min(ra, 120) * 1000 : 5000);
+          }
+          await r.body?.cancel();
+          return;
         }
-        return;
-      }
-      const ct = (r.headers.get('content-type') || '').toLowerCase();
-      if (/^text\/|html|json/.test(ct)) { worst = Math.max(worst, 415); return; } // hotlink/error page, not an image
-      const buf = Buffer.from(await r.arrayBuffer());
-      if (buf.length < 256) { worst = Math.max(worst, EMPTY_BODY); return; } // 200 with nothing behind it
-      // Content-Type first: some sources (and any source proxied through an extension server) serve pages
-      // from extension-less URLs, and a wrong extension makes the chapter read as zero pages.
-      page[i] = buf;
-      ext[i] = imageExt(u, ct);
-    } catch {
+        const ct = (r.headers.get('content-type') || '').toLowerCase();
+        if (/^text\/|html|json/.test(ct)) {
+          worst = Math.max(worst, 415);
+          await r.body?.cancel();
+          return;
+        } // hotlink/error page, not an image
+        const buf = Buffer.from(await r.arrayBuffer());
+        if (buf.length < 256) { worst = Math.max(worst, EMPTY_BODY); return; } // 200 with nothing behind it
+        // Content-Type first: some sources (and any source proxied through an extension server) serve pages
+        // from extension-less URLs, and a wrong extension makes the chapter read as zero pages.
+        page[i] = buf;
+        ext[i] = imageExt(u, ct);
+      }, { signal: currentSourceRequest().signal, timeoutMs: 45000, priority: 'background' });
+    } catch (error) {
+      if (isRequestQueueError(error)) throw error;
       worst = Math.max(worst, NET_ERROR); // network/timeout; never outranks a real HTTP status
     }
   };

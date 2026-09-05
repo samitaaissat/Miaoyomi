@@ -11,9 +11,11 @@
 import { classify } from './sourceHealth';
 import { env } from '../env';
 import type { SourceAdapter } from './sources/types';
+import { isRequestQueueError } from './requestQueue';
+import { currentSourceRequest, runSourceRequest, withSourceRequests } from './sourceRequests';
 
 export interface Check { name: string; ok: boolean; detail: string }
-export interface SmokeResult { ok: boolean; timedOut?: boolean; checks: Check[] }
+export interface SmokeResult { ok: boolean; timedOut?: boolean; deferred?: boolean; checks: Check[] }
 
 const clip = (s: unknown) => String(s || '').slice(0, 80);
 
@@ -32,53 +34,76 @@ const past = (deadline: number) => Date.now() >= deadline;
  * all four terms, so trying the rest costs four times as long to learn nothing. Only a parse-shaped failure
  * (returned nothing, threw nothing) justifies another term, and that is exactly the case this is for.
  */
-export async function smokeTest(src: SourceAdapter, opts: { timeoutMs?: number } = {}): Promise<SmokeResult> {
-  const deadline = Date.now() + (opts.timeoutMs ?? env.SOURCE_TEST_TIMEOUT_MS);
+export async function smokeTest(
+  src: SourceAdapter,
+  opts: { timeoutMs?: number; priority?: 'interactive' | 'background' } = {},
+): Promise<SmokeResult> {
+  const timeoutMs = opts.timeoutMs ?? env.SOURCE_TEST_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const inheritedSignal = currentSourceRequest().signal;
+  const signal = inheritedSignal ? AbortSignal.any([inheritedSignal, timeoutSignal]) : timeoutSignal;
   const checks: Check[] = [];
   const bail = (): SmokeResult => ({ ok: false, timedOut: true, checks });
+  const defer = (): SmokeResult => ({ ok: false, deferred: true, checks });
 
-  let results: any[] = [];
-  let searchOk = false;
-  let searchDetail = 'no results — markup may not match this engine';
-  for (const term of ['the', 'one', 'love', 'a']) {
-    if (past(deadline)) return bail();
-    try {
-      const r = await src.search(term);
-      if (Array.isArray(r) && r.length) { results = r; searchOk = true; searchDetail = `${r.length} result(s)`; break; }
-    } catch (e: any) {
-      searchDetail = clip(e?.message || 'error');
-      // Transport-level: the next three terms give the same answer at full price.
-      if (classify(e)) break;
-    }
-  }
-  checks.push({ name: 'Search', ok: searchOk, detail: searchDetail });
-  if (!searchOk) return { ok: false, checks };
-  if (past(deadline)) return bail();
-
-  let chapters: any[] = [];
   try {
-    const series = await src.getSeries(results[0].sourceId);
-    checks.push({ name: 'Series page', ok: !!series?.title, detail: series?.title ? clip(series.title) : 'no data' });
-    if (past(deadline)) return bail();
-    chapters = await src.listChapters(results[0].sourceId);
-    checks.push({ name: 'Chapters', ok: chapters.length > 0, detail: chapters.length ? `${chapters.length} chapter(s)` : 'none found' });
-  } catch (e: any) {
-    checks.push({ name: 'Series / chapters', ok: false, detail: clip(e?.message || 'error') });
-  }
+    return await withSourceRequests({ signal, priority: opts.priority ?? 'background' }, async () => {
+      let results: any[] = [];
+      let searchOk = false;
+      let searchDetail = 'no results — markup may not match this engine';
+      for (const term of ['the', 'one', 'love', 'a']) {
+        if (past(deadline)) return bail();
+        try {
+          const r = await src.search(term);
+          if (Array.isArray(r) && r.length) { results = r; searchOk = true; searchDetail = `${r.length} result(s)`; break; }
+        } catch (e: any) {
+          if (signal.aborted || isRequestQueueError(e)) throw e;
+          searchDetail = clip(e?.message || 'error');
+          // Transport-level: the next three terms give the same answer at full price.
+          if (classify(e)) break;
+        }
+      }
+      checks.push({ name: 'Search', ok: searchOk, detail: searchDetail });
+      if (!searchOk) return { ok: false, checks };
+      if (past(deadline)) return bail();
 
-  if (chapters.length) {
-    if (past(deadline)) return bail();
-    try {
-      const pages = await src.getPageUrls(chapters[0].sourceId);
-      checks.push({ name: 'Pages', ok: pages.length > 0, detail: pages.length ? `${pages.length} page(s)` : 'none found' });
-    } catch (e: any) {
-      checks.push({ name: 'Pages', ok: false, detail: clip(e?.message || 'error') });
-    }
+      let chapters: any[] = [];
+      try {
+        const series = await src.getSeries(results[0].sourceId);
+        checks.push({ name: 'Series page', ok: !!series?.title, detail: series?.title ? clip(series.title) : 'no data' });
+        if (past(deadline)) return bail();
+        chapters = await src.listChapters(results[0].sourceId);
+        checks.push({ name: 'Chapters', ok: chapters.length > 0, detail: chapters.length ? `${chapters.length} chapter(s)` : 'none found' });
+      } catch (e: any) {
+        if (signal.aborted || isRequestQueueError(e)) throw e;
+        checks.push({ name: 'Series / chapters', ok: false, detail: clip(e?.message || 'error') });
+      }
+
+      if (chapters.length) {
+        if (past(deadline)) return bail();
+        try {
+          const pages = await src.getPageUrls(chapters[0].sourceId);
+          checks.push({ name: 'Pages', ok: pages.length > 0, detail: pages.length ? `${pages.length} page(s)` : 'none found' });
+        } catch (e: any) {
+          if (signal.aborted || isRequestQueueError(e)) throw e;
+          checks.push({ name: 'Pages', ok: false, detail: clip(e?.message || 'error') });
+        }
+      }
+      return past(deadline) ? bail() : { ok: checks.every((c) => c.ok), checks };
+    });
+  } catch (error) {
+    // REQUEST_TIMEOUT is armed only after a scheduler slot is acquired. CANCELLED can mean the smoke wall
+    // expired while still queued, which is local pressure and must not be charged to the source. Conservatively
+    // defer that ambiguous case; a genuinely running source still has the queue's execution deadline.
+    if (isRequestQueueError(error) && error.code === 'REQUEST_TIMEOUT') return bail();
+    if (inheritedSignal?.aborted || isRequestQueueError(error)) return defer();
+    if (timeoutSignal.aborted) return bail();
+    throw error;
   }
-  return { ok: checks.every((c) => c.ok), checks };
 }
 
-export interface ProbeResult { httpStatus: number; finalUrl?: string; transport?: string; looksHtml?: boolean }
+export interface ProbeResult { httpStatus: number; finalUrl?: string; transport?: string; looksHtml?: boolean; deferred?: boolean }
 
 /**
  * Ask the site directly, with a plain fetch.
@@ -92,15 +117,25 @@ export interface ProbeResult { httpStatus: number; finalUrl?: string; transport?
  */
 export async function probeBase(url: string, timeoutMs = 8000): Promise<ProbeResult> {
   try {
-    const r = await fetch(url, {
-      redirect: 'follow',
-      signal: AbortSignal.timeout(timeoutMs),
-      // A default UA gets a bot block from some CDNs, which would look like a site problem and is not.
-      headers: { 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36' },
-    });
-    const ct = r.headers.get('content-type') || '';
-    return { httpStatus: r.status, finalUrl: r.url || url, looksHtml: /text\/html/i.test(ct) };
+    const key = (() => { try { return `probe:${new URL(url).origin}`; } catch { return `probe:${url}`; } })();
+    return await runSourceRequest(key, async (signal) => {
+      const r = await fetch(url, {
+        redirect: 'follow', signal,
+        // A default UA gets a bot block from some CDNs, which would look like a site problem and is not.
+        headers: { 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36' },
+      });
+      try {
+        const ct = r.headers.get('content-type') || '';
+        return { httpStatus: r.status, finalUrl: r.url || url, looksHtml: /text\/html/i.test(ct) };
+      } finally {
+        await r.body?.cancel().catch(() => {});
+      }
+    }, { timeoutMs, priority: 'background' });
   } catch (e: any) {
+    if (isRequestQueueError(e)) {
+      if (e.code !== 'REQUEST_TIMEOUT') return { httpStatus: 0, transport: e.code.toLowerCase(), deferred: true };
+      return { httpStatus: 0, transport: 'timeout' };
+    }
     // `cause.code` is where undici keeps ENOTFOUND / ECONNREFUSED; the message alone often says only
     // "fetch failed", which is the same shrug the stored errors already give us.
     const code = e?.cause?.code || e?.code || (e?.name === 'TimeoutError' ? 'timeout' : '') || 'fetch failed';

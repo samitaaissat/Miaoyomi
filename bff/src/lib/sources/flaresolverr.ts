@@ -1,6 +1,9 @@
 // Thin client for FlareSolverr (headless-Chrome Cloudflare solver). Returns solved page HTML, and keeps the
 // latest cf_clearance cookies + user-agent per origin so the downloader can fetch images directly afterwards.
 // Preserve the legacy default for unset environments; an explicit empty URL disables the integration.
+import { isRequestQueueError, RequestQueue } from '../requestQueue';
+import { currentSourceRequest } from '../sourceRequests';
+
 const FS = (process.env.FLARESOLVERR_URL ?? 'http://yomi-flaresolverr:8191').replace(/\/$/, '');
 
 interface Solution { url: string; status: number; response: string; cookies: Array<{ name: string; value: string }>; userAgent: string }
@@ -15,36 +18,37 @@ const sessions = new Map<string, { cookie: string; userAgent: string }>();
  * our own fan-out. A crashed solve is reported as the SITE refusing us, so this was manufacturing source
  * failures out of nothing.
  */
-export const SOLVER_CONCURRENCY = Math.max(1, Number(process.env.SOLVER_CONCURRENCY || 4));
-let inFlight = 0;
-const waiting: Array<() => void> = [];
+export const SOLVER_CONCURRENCY = Math.max(1, Number(process.env.SOLVER_CONCURRENCY || 2));
+const SOLVER_QUEUE_LIMIT = Math.max(0, Number(process.env.SOLVER_QUEUE_LIMIT || 64));
+const SOLVER_QUEUE_TIMEOUT_MS = Math.max(1, Number(process.env.SOLVER_QUEUE_TIMEOUT_MS || 30000));
+const SOLVER_REQUEST_TIMEOUT_MS = Math.max(1, Number(process.env.SOLVER_REQUEST_TIMEOUT_MS || 95000));
+const solverQueue = new RequestQueue({
+  concurrency: SOLVER_CONCURRENCY,
+  perKeyConcurrency: SOLVER_CONCURRENCY,
+  maxQueued: SOLVER_QUEUE_LIMIT,
+  maxQueuedPerKey: SOLVER_QUEUE_LIMIT,
+  maxWaitMs: SOLVER_QUEUE_TIMEOUT_MS,
+  defaultTimeoutMs: SOLVER_REQUEST_TIMEOUT_MS,
+});
+/** Stop queued work and abort active browser transports during application shutdown. */
+export const closeSolverQueue = (): void => solverQueue.close();
 
-async function acquire(): Promise<void> {
-  if (inFlight < SOLVER_CONCURRENCY) { inFlight++; return; }
-  await new Promise<void>((resolve) => waiting.push(resolve));
-  inFlight++;
-}
-function release(): void {
-  inFlight--;
-  waiting.shift()?.();
-}
-
-async function solve(cmd: 'request.get' | 'request.post', url: string, postData?: string): Promise<Solution> {
+async function solve(cmd: 'request.get' | 'request.post', url: string, postData?: string, signal?: AbortSignal): Promise<Solution> {
   if (!FS) throw new Error('flaresolverr: disabled');
-  await acquire();
-  try {
-    return await solveNow(cmd, url, postData);
-  } finally {
-    release();
-  }
+  const origin = new URL(url).origin;
+  return solverQueue.run(
+    origin,
+    (queueSignal) => solveNow(cmd, url, postData, queueSignal),
+    { signal: signal ?? currentSourceRequest()?.signal },
+  );
 }
 
-async function solveNow(cmd: 'request.get' | 'request.post', url: string, postData?: string): Promise<Solution> {
+async function solveNow(cmd: 'request.get' | 'request.post', url: string, postData: string | undefined, signal: AbortSignal): Promise<Solution> {
   const r = await fetch(`${FS}/v1`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ cmd, url, postData, maxTimeout: 60000 }),
-    signal: AbortSignal.timeout(95000),
+    signal,
   });
   const j: any = await r.json();
   if (j.status !== 'ok' || !j.solution) throw new Error(`flaresolverr: ${j.message || j.status}`);
@@ -80,19 +84,21 @@ function body(s: Solution, url: string): string {
   );
 }
 
-export async function cfGet(url: string): Promise<string> {
-  return body(await solve('request.get', url), url);
+export async function cfGet(url: string, signal?: AbortSignal): Promise<string> {
+  return body(await solve('request.get', url, undefined, signal), url);
 }
-export async function cfPost(url: string, postData: string): Promise<string> {
-  return body(await solve('request.post', url, postData), url);
+export async function cfPost(url: string, postData: string, signal?: AbortSignal): Promise<string> {
+  return body(await solve('request.post', url, postData, signal), url);
 }
 
 /** Cookie header + UA to fetch binaries (images) directly — FlareSolverr can't return binary bodies. */
 /** Origins whose last solve failed, and when, so a dead root is not re-solved for every chapter. */
 const unsolvable = new Map<string, number>();
 const RESOLVE_AFTER_MS = 5 * 60_000;
+const locallyCancelled = (error: unknown, signal?: AbortSignal) =>
+  isRequestQueueError(error) || signal?.aborted || currentSourceRequest().signal?.aborted;
 
-export async function cfSession(url: string): Promise<{ cookie: string; userAgent: string }> {
+export async function cfSession(url: string, signal?: AbortSignal): Promise<{ cookie: string; userAgent: string }> {
   const origin = new URL(url).origin;
   // Only the side effect matters here: `solve` stores the cookie jar before it returns, so an empty body
   // (which now throws) has still given us what we came for. Before `cfGet` could throw this was a bare
@@ -105,7 +111,18 @@ export async function cfSession(url: string): Promise<{ cookie: string; userAgen
     // no clearance cookie at all -- on the sites where the 429s were coming from.
     //
     // So fall back to the URL we are actually about to fetch. That one exists, so it can be solved.
-    await cfGet(`${origin}/`).catch(() => cfGet(url)).catch(() => {});
+    try {
+      await cfGet(`${origin}/`, signal);
+    } catch (error) {
+      // Cancellation is the caller withdrawing its own work. Retrying would outlive that caller, and marking
+      // the origin unsolvable would turn our local budget into a five-minute site-health decision.
+      if (locallyCancelled(error, signal)) throw error;
+      try {
+        await cfGet(url, signal);
+      } catch (fallbackError) {
+        if (locallyCancelled(fallbackError, signal)) throw fallbackError;
+      }
+    }
     if (sessions.has(origin)) unsolvable.delete(origin);
     else unsolvable.set(origin, Date.now());
   }

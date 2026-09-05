@@ -47,7 +47,7 @@ test('novel discovery aggregates permitted sources and paginates each source ind
       assert.deepEqual(r.json().items.map((v:any)=>[v.sourceId,v.title]),[['alpha','alpha 1'],['beta','beta 1']]);
       assert.deepEqual(calls.map(c=>c.id).sort(),['alpha','beta','gamma']);
       for(const call of calls)assert.equal(call.args[1].filters.order.value,`${call.id}-default`);
-      assert.ok(peak<=2,'fan-out respects the private engine worker capacity');
+      assert.equal(peak,3,'eligible sources use the increased private engine worker capacity');
       assert.deepEqual(r.json().errors,[]);assert.equal(r.json().hasMore,true);assert.ok(r.json().nextCursor);
     });
     await t.test('filters restrict source subsets, language and latest capability without an automatic first source',async()=>{
@@ -97,14 +97,14 @@ test('novel discovery aggregates permitted sources and paginates each source ind
       const slowEngine={...engine,async source(id:string){return makeSource(id);},async invoke(id:string){
         await new Promise(resolve=>setTimeout(resolve,30));return [{name:id,path:'novel'}];
       }};
-      const first=await discoverNovels(slowEngine,many,{page:1,budgetMs:10});
+      const first=await discoverNovels(slowEngine,many,{page:1,budgetMs:10,concurrency:2});
       assert.deepEqual(first.items.map(v=>v.sourceId),['slow-0','slow-1']);
       const pages=discoveryCursor(first.nextCursor)!;
       assert.deepEqual(Object.keys(pages),['slow-2','slow-3','slow-4','slow-5','slow-0','slow-1']);
       assert.equal(pages['slow-2'],1);assert.equal(pages['slow-0'],2);
-      const second=await discoverNovels(slowEngine,many,{page:2,pages,budgetMs:10});
+      const second=await discoverNovels(slowEngine,many,{page:2,pages,budgetMs:10,concurrency:2});
       assert.deepEqual(second.items.map(v=>v.sourceId),['slow-2','slow-3']);
-      const third=await discoverNovels(slowEngine,many,{page:3,pages:discoveryCursor(second.nextCursor),budgetMs:10});
+      const third=await discoverNovels(slowEngine,many,{page:3,pages:discoveryCursor(second.nextCursor),budgetMs:10,concurrency:2});
       assert.deepEqual(third.items.map(v=>v.sourceId),['slow-4','slow-5']);
     });
     await t.test('invalid filters and forbidden source selections fail before any source work',async()=>{

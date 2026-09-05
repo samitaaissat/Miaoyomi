@@ -5,6 +5,8 @@ import { q, one, tx } from '../lib/db';
 import { content as komga } from '../lib/backend';
 import { cacheBytes } from '../lib/imageCache';
 import { runtime } from '../lib/runtime';
+import { sourceRequestQueue } from '../lib/sourceRequests';
+import { RequestQueueError } from '../lib/requestQueue';
 import { persistScan, libraryIdFor, LIBRARY_ROOT, DL_ROOT } from '../lib/library';
 import { containedPath } from '../lib/fsGuard';
 import { deleteSeries, restoreSeries, mergeSeries, getSeriesRow, deleteSeriesFiles, renameSeriesFolder } from '../lib/libraryAdmin';
@@ -1370,7 +1372,7 @@ export default async function adminRoutes(app: FastifyInstance) {
   app.get('/api/admin/import/status', async () => ({ job: importJob }));
 
   // ---- provider/source health control ----
-  app.get('/api/admin/sources', async () => ({ content: await healthAll() }));
+  app.get('/api/admin/sources', async () => ({ content: await healthAll(), requests: sourceRequestQueue.snapshot() }));
   /**
    * Go and look at this source right now, and say what is wrong with it.
    *
@@ -1432,6 +1434,9 @@ export default async function adminRoutes(app: FastifyInstance) {
       // nothing. This one request separates "moved", "refused" and "solver down" from each other.
       const bare = src.base ? await probeBase(src.base) : undefined;
       const smoke = await smokeTest(src);
+      if (bare?.deferred || smoke.deferred) {
+        throw new RequestQueueError('QUEUE_TIMEOUT', 'Source check deferred while request capacity was unavailable. Retry shortly.');
+      }
       // Same evidence the scheduled sweep uses, so the button and the schedule cannot disagree.
       const probe = bare && { ...bare, adapterOk: smoke.ok, needsSolver: !!src.requiresCloudflare };
       const facts = {

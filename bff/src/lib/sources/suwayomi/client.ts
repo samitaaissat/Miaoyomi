@@ -7,6 +7,7 @@
 // The endpoint is `/api/graphql`, NOT `/graphql`; the published docs say otherwise and the server 404s on it.
 // Verified against Suwayomi-Server v2.2.2100.
 import { env } from '../../../env';
+import { sourceRequestSignal } from '../../sourceRequests';
 
 export interface GqlError extends Error {
   status?: number;
@@ -41,7 +42,7 @@ export async function gql<T = unknown>(query: string, variables: Record<string, 
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json', ...suwayomiImageHeaders() },
     body: JSON.stringify({ query, variables }),
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: sourceRequestSignal(timeoutMs),
   });
   if (!r.ok) {
     const e: GqlError = new Error(`suwayomi ${r.status}`);

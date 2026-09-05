@@ -71,9 +71,18 @@ services:
       # Extension engine (Mihon/Tachiyomi extensions). Set to an empty string to turn it off entirely and
       # drop the container below; it is a JVM and costs about 800 MB.
       SUWAYOMI_URL: ${SUWAYOMI_URL:-http://uchiyomi-suwayomi:4567}
+      SOURCE_REQUEST_CONCURRENCY: ${SOURCE_REQUEST_CONCURRENCY:-4}
+      SOURCE_REQUEST_PER_SOURCE: ${SOURCE_REQUEST_PER_SOURCE:-2}
+      SOURCE_REQUEST_QUEUE_LIMIT: ${SOURCE_REQUEST_QUEUE_LIMIT:-128}
+      SOURCE_REQUEST_QUEUE_PER_SOURCE: ${SOURCE_REQUEST_QUEUE_PER_SOURCE:-32}
+      SOURCE_REQUEST_QUEUE_WAIT_MS: ${SOURCE_REQUEST_QUEUE_WAIT_MS:-30000}
+      SOURCE_REQUEST_TIMEOUT_MS: ${SOURCE_REQUEST_TIMEOUT_MS:-30000}
+      SOLVER_CONCURRENCY: ${SOLVER_CONCURRENCY:-2}
+      SOLVER_QUEUE_LIMIT: ${SOLVER_QUEUE_LIMIT:-64}
+      SOLVER_QUEUE_TIMEOUT_MS: ${SOLVER_QUEUE_TIMEOUT_MS:-30000}
+      SOLVER_REQUEST_TIMEOUT_MS: ${SOLVER_REQUEST_TIMEOUT_MS:-95000}
       SUWAYOMI_USERNAME: ${SUWAYOMI_USERNAME:-}
       SUWAYOMI_PASSWORD: ${SUWAYOMI_PASSWORD:-}
-      SUWAYOMI_MAX_SOURCES: ${SUWAYOMI_MAX_SOURCES:-25}
     volumes:
       - ${LIBRARY_PATH:-./library}:/library      # your existing comics (see PUID above)
       - ${SOURCES_PATH:-./sources}:/sources:ro   # optional built source pack

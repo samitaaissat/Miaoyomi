@@ -1,12 +1,17 @@
 import { Worker } from 'node:worker_threads';
 import { EngineError } from './errors.mjs';
-export async function executePlugin(script, method, args = [], { fetch, deadlineMs = 20_000, memoryBytes, storageSnapshot, onStorage } = {}) {
+export async function executePlugin(script, method, args = [], { fetch, deadlineMs = 20_000, memoryBytes, storageSnapshot, onStorage, signal } = {}) {
+  const cancelled = () => new EngineError('DEADLINE', 'Plugin worker request cancelled', 504);
+  if (signal?.aborted) throw cancelled();
   const controller = new AbortController();
   const worker = new Worker(new URL('./worker.mjs', import.meta.url), { workerData: { script, method, args, deadlineMs, memoryBytes, storageSnapshot }, env: {}, execArgv: [], resourceLimits: { maxOldGenerationSizeMb: 128, stackSizeMb: 4 } });
-  let timeout; let settled = false;
+  let timeout; let abort; let settled = false;
   try {
     return await new Promise((resolve, reject) => {
       const finish = (error, value) => { if (settled) return; settled = true; error ? reject(error) : resolve(value); };
+      abort = () => { controller.abort(); finish(cancelled()); };
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) abort();
       timeout = setTimeout(() => finish(new EngineError('DEADLINE', 'Plugin worker deadline exceeded', 504)), deadlineMs);
       worker.on('error', error => finish(new EngineError('EXECUTOR_ERROR', error.message)));
       worker.on('exit', code => { if (!settled) finish(new EngineError('EXECUTOR_ERROR', `Plugin worker exited (${code})`)); });
@@ -22,5 +27,5 @@ export async function executePlugin(script, method, args = [], { fetch, deadline
         } catch (error) { if (!settled) worker.postMessage({ id: message.id, error: { code: error.code || 'SOURCE_ERROR', message: error.message, status: error.status || 502 } }); }
       });
     });
-  } finally { clearTimeout(timeout); controller.abort(); await worker.terminate(); }
+  } finally { clearTimeout(timeout); signal?.removeEventListener('abort', abort); controller.abort(); await worker.terminate(); }
 }

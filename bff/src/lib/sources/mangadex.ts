@@ -1,13 +1,14 @@
 // MangaDex built-in source — official public API (no key, no scraping, no Cloudflare). The most defensible
 // source, so it's bundled in the core and always on. Docs: https://api.mangadex.org/docs/
 import { SourceAdapter, SourceSeries, SourceChapter } from './types';
+import { sourceRequestSignal } from '../sourceRequests';
 
 const API = 'https://api.mangadex.org';
 const HEADERS = { 'user-agent': 'Uchiyomi/1.0 (self-hosted personal reader)' };
 const RATINGS = ['safe', 'suggestive', 'erotica'].map((r) => `contentRating[]=${r}`).join('&');
 
 async function jget(url: string): Promise<any> {
-  const r = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(15000) });
+  const r = await fetch(url, { headers: HEADERS, signal: sourceRequestSignal(15000) });
   if (!r.ok) throw new Error(`mangadex ${r.status}`);
   return r.json();
 }

@@ -10,6 +10,7 @@
 // Two outputs from one call: a log line a person can grep, and one row per MISSING chapter (not per attempt)
 // that the health page reads and persistScan deletes the moment the chapter lands.
 import { q } from './db';
+import { isRequestQueueError } from './requestQueue';
 
 export interface ChapterFailure {
   seriesId: string;
@@ -28,8 +29,13 @@ const reasonOf = (e: any): string => String(e?.message || e || 'unknown error').
  */
 const statusOf = (e: any): string => e?.blockStatus ?? (e?.pages !== undefined ? 'incomplete' : 'error');
 
+/** Waiting for local capacity did not reach the source and must not consume a chapter's retry allowance. */
+export const isLocalDownloadQueueError = (error: unknown): boolean =>
+  isRequestQueueError(error) && error.code !== 'REQUEST_TIMEOUT';
+
 export async function noteChapterFailure(f: ChapterFailure): Promise<void> {
   const e: any = f.err;
+  if (isLocalDownloadQueueError(e)) return;
   const status = statusOf(e);
   const pages = e?.pages !== undefined && e?.expected ? `${e.pages}/${e.expected} pages, ` : '';
   const blame = e?.blockStatus ? `${e.blockStatus} (cooldown)` : `${status} (no cooldown)`;

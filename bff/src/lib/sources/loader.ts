@@ -6,6 +6,7 @@ import { readdirSync } from 'fs';
 import { join } from 'path';
 import type { SourceAdapter, SourceHost } from './types';
 import { cfGet, cfPost, cfSession } from './flaresolverr';
+import { scheduleSourceAdapter } from '../sourceRequests';
 
 const registry = new Map<string, SourceAdapter>();
 // host services injected into a plugin's register(host) so plugins never import core internals by path.
@@ -20,7 +21,7 @@ function isAdapter(x: any): x is SourceAdapter {
 export function registerAdapter(a: SourceAdapter): boolean {
   if (!isAdapter(a)) return false;
   if (registry.has(a.id)) { console.warn(`[sources] duplicate id '${a.id}' ignored`); return false; }
-  registry.set(a.id, a);
+  registry.set(a.id, scheduleSourceAdapter(a));
   return true;
 }
 

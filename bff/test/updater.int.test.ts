@@ -39,9 +39,9 @@ if (DSN) {
 const skip = DSN ? false : 'set TEST_DATABASE_URL to run';
 
 const LIB = 'lib_upd';
-const SRC_OK = 'upd-ok', SRC_THROW = 'upd-throw', SRC_HANG = 'upd-hang', SRC_EMPTY = 'upd-empty';
+const SRC_OK = 'upd-ok', SRC_THROW = 'upd-throw', SRC_UNDEFINED = 'upd-undefined', SRC_HANG = 'upd-hang', SRC_EMPTY = 'upd-empty';
 const SRC_BLOCK = 'upd-block';
-const SRC_MANY = 'upd-many', SRC_LAND = 'upd-land', SRC_LEDGER = 'upd-ledger';
+const SRC_MANY = 'upd-many', SRC_LAND = 'upd-land', SRC_LEDGER = 'upd-ledger', SRC_QUEUE = 'upd-queue';
 const PIXEL = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(400, 7)]);
 const png = () => new Response(PIXEL, { status: 200, headers: { 'content-type': 'image/png' } });
 /** Counts how many chapters the sweep actually ATTEMPTS against a source that is refusing. */
@@ -49,13 +49,14 @@ let blockAsks = 0;
 const S = (k: string) => `s_upd_${k}`;
 let q: any, updateSeries: any, runUpdateAll: any;
 
-function fake(id: string, mode: 'ok' | 'throw' | 'hang' | 'empty') {
+function fake(id: string, mode: 'ok' | 'throw' | 'undefined' | 'hang' | 'empty') {
   return {
     id, name: id,
     async search() { return []; },
     async getSeries(sid: string) { return { sourceId: sid, source: id, title: id }; },
     async listChapters() {
       if (mode === 'throw') throw new Error('site refused');
+      if (mode === 'undefined') return Promise.reject(undefined);
       if (mode === 'hang') return new Promise<any[]>(() => {});   // a site behind a challenge that never answers
       if (mode === 'empty') return [];
       return [{ number: 1, title: 'Chapter 1', id: 'c1' }];
@@ -75,6 +76,7 @@ before(async () => {
 
   registerAdapter(fake(SRC_OK, 'ok') as any);
   registerAdapter(fake(SRC_THROW, 'throw') as any);
+  registerAdapter(fake(SRC_UNDEFINED, 'undefined') as any);
   registerAdapter(fake(SRC_HANG, 'hang') as any);
   registerAdapter(fake(SRC_EMPTY, 'empty') as any);
   registerAdapter({
@@ -94,6 +96,7 @@ before(async () => {
        VALUES ($1,'T!upd',$1,$1,0,$2,$3,$4,true) ON CONFLICT (id) DO NOTHING`,
       [S(key), LIB, sourceId, sourceId ? `${sourceId}-1` : null]);
   await mk('throw', SRC_THROW);
+  await mk('undefined', SRC_UNDEFINED);
   await mk('hang', SRC_HANG);
   await mk('empty', SRC_EMPTY);
   await mk('unrouted', null);
@@ -117,11 +120,17 @@ before(async () => {
     ...many(SRC_LEDGER, 2),
     async getPageUrls(chId: string) { return Array.from({ length: 5 }, (_, i) => `https://example.invalid/${chId}/l${i}.png`); },
   } as any);
+  const { RequestQueueError } = await import('../src/lib/requestQueue');
+  registerAdapter({
+    ...many(SRC_QUEUE, 1),
+    async getPageUrls() { throw new RequestQueueError('QUEUE_FULL', 'download capacity is full'); },
+  } as any);
   await mk('ok', SRC_OK);
   for (const k of ['many1', 'many2', 'many3', 'rotA', 'rotB']) await mk(k, SRC_MANY);
   for (const k of ['block2', 'block3']) await mk(k, SRC_BLOCK);
   await mk('land', SRC_LAND);
   await mk('ledger', SRC_LEDGER);
+  await mk('queue', SRC_QUEUE);
 });
 
 after(async () => {
@@ -141,6 +150,11 @@ test('a series says WHY it produced nothing', { skip }, async (t) => {
     const r = await updateSeries(S('throw'));
     assert.equal(r.added, 0);
     assert.equal(r.outcome, 'source_error', 'a refusing site must be distinguishable from having nothing new');
+  });
+
+  await t.test('even an undefined rejection remains a source failure', async () => {
+    const r = await updateSeries(S('undefined'));
+    assert.equal(r.outcome, 'source_error');
   });
 
   await t.test('a source that hangs is bounded, and reported', async () => {
@@ -369,6 +383,18 @@ test('a chapter that will not download is written down, and erased when it lands
   assert.ok(onDisk('ledger', 2));
   await persistScan();
   assert.equal(await row(), undefined, 'erased the moment the chapter exists');
+});
+
+test('local download pressure defers the sweep without consuming the chapter retry cap', { skip }, async () => {
+  await q('DELETE FROM chapter_failures WHERE series_id = $1', [S('queue')]);
+  await q('DELETE FROM source_health WHERE source_id = $1', [SRC_QUEUE]);
+
+  const result = await updateSeries(S('queue'), 1);
+
+  assert.equal(result.outcome, 'deferred');
+  assert.equal(result.failed, 0, 'waiting for local capacity is not a failed chapter attempt');
+  const rows = await q('SELECT attempts FROM chapter_failures WHERE series_id = $1', [S('queue')]);
+  assert.deepEqual(rows, [], 'local pressure must not move a chapter toward the permanent retry cap');
 });
 
 

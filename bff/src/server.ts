@@ -33,6 +33,9 @@ import opdsRoutes from './routes/opds';
 import novelRoutes from './routes/novels';
 import { migrateNovels } from './lib/novels/migrate';
 import { migrateMangaImmediate } from './lib/mangaImmediateMigrate';
+import { installSourceRequestContext, sourceRequestQueue } from './lib/sourceRequests';
+import { isRequestQueueError } from './lib/requestQueue';
+import { closeSolverQueue } from './lib/sources/flaresolverr';
 
 async function main() {
   await migrate();
@@ -54,6 +57,8 @@ async function main() {
     trustProxy: true,
     bodyLimit: 2 * 1024 * 1024,
   });
+  installSourceRequestContext(app);
+  app.addHook('preClose', async () => { sourceRequestQueue.close(); closeSolverQueue(); });
 
   await app.register(helmet, { contentSecurityPolicy: false, crossOriginResourcePolicy: false });
   await app.register(cors, { origin: env.PUBLIC_ORIGIN, credentials: true });
@@ -106,6 +111,9 @@ async function main() {
   // `schema.parse()` returned 500 with the entire ZodError -- field names, expected types and all -- to any
   // client that sent a malformed body.
   app.setErrorHandler((err, req, reply) => {
+    if (isRequestQueueError(err)) {
+      return reply.code(err.statusCode).header('retry-after', '1').send({ error: err.code, message: err.message });
+    }
     if (err instanceof KomgaError) {
       const code = err.status >= 400 && err.status < 600 ? err.status : 502;
       return reply.code(code).send({ error: 'komga', status: err.status });
@@ -281,7 +289,7 @@ async function main() {
   for (const sig of ['SIGTERM', 'SIGINT'] as const) {
     process.once(sig, () => {
       runtime.stopping = true;
-      app.log.info(`${sig}: finishing the current chapter, then stopping`);
+      app.log.info(`${sig}: cancelling source requests and stopping`);
       void app.close().finally(() => process.exit(0));
       setTimeout(() => process.exit(0), 20_000).unref(); // never hang a shutdown on a slow site
     });

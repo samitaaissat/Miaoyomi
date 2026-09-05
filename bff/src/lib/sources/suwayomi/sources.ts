@@ -46,7 +46,7 @@ const FETCH_SOURCE_MANGA = `mutation($source:LongString!,$type:FetchSourceMangaT
 const FETCH_MANGA = `mutation($id:Int!){ fetchManga(input:{id:$id}){ manga { ${MANGA_FIELDS} } } }`;
 
 const FETCH_CHAPTERS = `mutation($mangaId:Int!){
-  fetchChapters(input:{mangaId:$mangaId}){ chapters { id chapterNumber name scanlator uploadDate pageCount } }
+  fetchChapters(input:{mangaId:$mangaId}){ chapters { id chapterNumber sourceOrder name scanlator uploadDate pageCount } }
 }`;
 
 const FETCH_PAGES = `mutation($chapterId:Int!){ fetchChapterPages(input:{chapterId:$chapterId}){ pages } }`;
@@ -67,6 +67,7 @@ interface RemoteManga {
 interface RemoteChapter {
   id: number;
   chapterNumber?: number | null;
+  sourceOrder?: number | null;
   name?: string | null;
   scanlator?: string | null;
   uploadDate?: string | null; // epoch millis as a string (Suwayomi's LongString)
@@ -96,11 +97,24 @@ function toSeries(m: RemoteManga, adapterId: string): SourceSeries | null {
   };
 }
 
-function toChapter(c: RemoteChapter): SourceChapter | null {
+function toChapter(c: RemoteChapter, reportedNumbers: Set<number>, fallbackNumbers: Set<number>): SourceChapter | null {
   if (c?.id == null) return null;
-  const num = typeof c.chapterNumber === 'number' ? c.chapterNumber : NaN;
-  // A chapter with no usable number can't be ordered, named or diffed against the library — drop it rather
-  // than inventing 0, which would collide with a real chapter 0.
+  const reported = typeof c.chapterNumber === 'number' ? c.chapterNumber : NaN;
+  // -1 is Suwayomi's valid "unknown number" sentinel. Gallery sources intentionally use it for their one
+  // readable item, so dropping it erases the whole title. Suwayomi persists sourceOrder as a one-based,
+  // oldest-first position. A stable fraction from the chapter id keeps this in that position while reserving
+  // the bare integer for a real chapter that may arrive on a later refresh.
+  let num = reported;
+  if (!Number.isFinite(reported) || reported < 0) {
+    const order = typeof c.sourceOrder === 'number' && c.sourceOrder > 0 ? c.sourceOrder : NaN;
+    num = order;
+    if (Number.isFinite(order)) {
+      const stableFraction = ((Math.abs(c.id) % 999_999) + 1) / 1_000_000;
+      num = Number((order + stableFraction).toFixed(6));
+      while (reportedNumbers.has(num) || fallbackNumbers.has(num)) num = Number((num + 0.000001).toFixed(6));
+    }
+    if (Number.isFinite(num)) fallbackNumbers.add(num);
+  }
   if (!Number.isFinite(num) || num < 0) return null;
   const when = Number(c.uploadDate);
   return {
@@ -169,8 +183,12 @@ export function makeSuwayomiAdapter(remote: RemoteSource, run: Gql = defaultGql)
       const list = d?.fetchChapters?.chapters;
       if (!Array.isArray(list)) return [];
       const seen = new Set<string>();
+      const reportedNumbers = new Set(list
+        .map((c) => c?.chapterNumber)
+        .filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0));
+      const fallbackNumbers = new Set<number>();
       return list
-        .map(toChapter)
+        .map((c) => toChapter(c, reportedNumbers, fallbackNumbers))
         .filter((c): c is SourceChapter => !!c && (seen.has(c.sourceId) ? false : (seen.add(c.sourceId), true)))
         .sort((a, b) => a.number - b.number);
     },

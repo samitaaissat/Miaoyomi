@@ -96,6 +96,63 @@ test('chapters preserve same-number releases and deduplicate only source identit
   assert.equal(cs[0].publishedAt, new Date(1787177840210).toISOString());
 });
 
+test('an unnumbered gallery chapter gets a stable number in its Suwayomi source-order position', async () => {
+  const { makeSuwayomiAdapter } = await load();
+  const a = makeSuwayomiAdapter(LOCAL, fakeGql({
+    // Gallery extensions such as 3Hentai intentionally expose one chapter named "Chapter". SChapter's
+    // valid unknown-number sentinel is -1, while sourceOrder still gives its stable oldest-first position.
+    fetchChapters: { fetchChapters: { chapters: [
+      { id: 71, chapterNumber: -1, sourceOrder: 1, name: 'Chapter', pageCount: -1 },
+    ] } },
+  }));
+
+  const chapters = await a.listChapters('9');
+  assert.equal(chapters.length, 1);
+  assert.equal(chapters[0].sourceId, '71');
+  assert.equal(chapters[0].title, 'Chapter');
+  assert.ok(chapters[0].number > 1 && chapters[0].number < 2,
+    'the synthetic number should sort at sourceOrder 1 without occupying real chapter 1');
+});
+
+test('an unnumbered chapter never collides with a real chapter number', async () => {
+  const { makeSuwayomiAdapter } = await load();
+  const a = makeSuwayomiAdapter(LOCAL, fakeGql({
+    fetchChapters: { fetchChapters: { chapters: [
+      { id: 81, chapterNumber: -1, sourceOrder: 1, name: 'Extra' },
+      { id: 82, chapterNumber: 1, sourceOrder: 2, name: 'Chapter 1' },
+    ] } },
+  }));
+
+  const chapters = await a.listChapters('9');
+  assert.equal(chapters.length, 2);
+  assert.equal(chapters.find((c) => c.sourceId === '82')?.number, 1, 'real numbering must win');
+  assert.notEqual(chapters[0].number, chapters[1].number,
+    'downloading both chapters would otherwise target the same Chapter 1.cbz');
+});
+
+test('a later real chapter does not renumber or hide an existing unnumbered chapter', async () => {
+  const { makeSuwayomiAdapter } = await load();
+  const first = makeSuwayomiAdapter(LOCAL, fakeGql({
+    fetchChapters: { fetchChapters: { chapters: [
+      { id: 91, chapterNumber: -1, sourceOrder: 1, name: 'Gallery' },
+    ] } },
+  }));
+  const original = (await first.listChapters('9'))[0].number;
+
+  const refreshed = makeSuwayomiAdapter(LOCAL, fakeGql({
+    fetchChapters: { fetchChapters: { chapters: [
+      { id: 91, chapterNumber: -1, sourceOrder: 1, name: 'Gallery' },
+      { id: 92, chapterNumber: 1, sourceOrder: 2, name: 'Chapter 1' },
+    ] } },
+  }));
+  const chapters = await refreshed.listChapters('9');
+
+  assert.equal(chapters.find((c) => c.sourceId === '91')?.number, original,
+    'an updater must still recognize the gallery it already downloaded');
+  assert.equal(chapters.find((c) => c.sourceId === '92')?.number, 1,
+    'the new real chapter must not be mistaken for the old gallery');
+});
+
 test('page urls are made absolute against the extension server', async () => {
   const { makeSuwayomiAdapter } = await load();
   const a = makeSuwayomiAdapter(LOCAL, fakeGql({

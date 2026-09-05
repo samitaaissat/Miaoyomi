@@ -30,15 +30,17 @@ export function discoveryCursor(cursor?:string):Record<string,number>|undefined 
 }
 
 /** Sources are authorized by the route before any metadata or website request. */
-export async function discoverNovels(engine:NovelEngine,sources:EngineSource[],options:{page:number;pages?:Record<string,number>;mode?:'popular'|'latest';query?:string;filters?:Record<string,unknown>;budgetMs?:number}) {
+export async function discoverNovels(engine:NovelEngine,sources:EngineSource[],options:{page:number;pages?:Record<string,number>;mode?:'popular'|'latest';query?:string;filters?:Record<string,unknown>;budgetMs?:number;concurrency?:number}) {
   const byId=new Map(sources.map(source=>[source.id,source]));
   const pending=options.pages?Object.keys(options.pages).flatMap(id=>byId.has(id)?[byId.get(id)!]:[]):sources;
   const results:Array<{items:NovelCard[];next?:number;error?:SourceFailure}>=new Array(pending.length);
   const scheduleUntil=Date.now()+(options.budgetMs??10_000);
+  const concurrency=options.concurrency??4;
+  if(!Number.isSafeInteger(concurrency)||concurrency<1||concurrency>32)throw new Error('Invalid discovery concurrency');
   let index=0;
-  // The private engine has two workers. Keep every source in scope without flooding it.
+  // Match the engine's default worker count; its bounded queue absorbs other users' work.
   async function worker(){
-    while(index<pending.length&&(index<2||Date.now()<scheduleUntil)){
+    while(index<pending.length&&(index<concurrency||Date.now()<scheduleUntil)){
       const slot=index++,candidate=pending[slot],page=options.pages?.[candidate.id]??options.page;
       try{
         const source=await engine.source(candidate.id);
@@ -60,7 +62,7 @@ export async function discoverNovels(engine:NovelEngine,sources:EngineSource[],o
       }
     }
   }
-  await Promise.all(Array.from({length:Math.min(2,pending.length)},()=>worker()));
+  await Promise.all(Array.from({length:Math.min(concurrency,pending.length)},()=>worker()));
   // Interleave catalogs so the first screen represents every responding source.
   const items:NovelCard[]=[];
   const seen=new Set<string>();

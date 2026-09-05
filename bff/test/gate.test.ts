@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { withGate, gateDepth } from '../src/lib/gate';
+import { isRequestQueueError } from '../src/lib/requestQueue';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -53,4 +54,89 @@ test('queued work still runs after a failure ahead of it', async () => {
   const following = withGate('mixed', async () => { ran.push('ran'); }, { concurrency: 1 });
   await Promise.all([failing, following]);
   assert.ok(ran.includes('ran'), 'work queued behind a failure must still execute');
+});
+
+test('rejects work beyond the per-key pending bound', async () => {
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  const active = withGate('bounded-key', () => hold, { concurrency: 1, maxPendingPerKey: 1 });
+  const queued = withGate('bounded-key', async () => {}, { concurrency: 1, maxPendingPerKey: 1 });
+  await sleep(5);
+
+  await assert.rejects(
+    withGate('bounded-key', async () => {}, { concurrency: 1, maxPendingPerKey: 1 }),
+    (e: any) => isRequestQueueError(e) && e.code === 'QUEUE_FULL' && e.statusCode === 503,
+  );
+  release();
+  await Promise.all([active, queued]);
+});
+
+test('bounds pending work across many different keys', async () => {
+  const releases: Array<() => void> = [];
+  const active = ['global-a', 'global-b', 'global-c'].map((key) => withGate(key, () =>
+    new Promise<void>((resolve) => releases.push(resolve)), { concurrency: 1, maxPendingTotal: 2 }));
+  await sleep(5);
+  const waiting = [
+    withGate('global-a', async () => {}, { concurrency: 1, maxPendingTotal: 2 }),
+    withGate('global-b', async () => {}, { concurrency: 1, maxPendingTotal: 2 }),
+  ];
+  await sleep(5);
+
+  await assert.rejects(
+    withGate('global-c', async () => {}, { concurrency: 1, maxPendingTotal: 2 }),
+    (e: any) => isRequestQueueError(e) && e.code === 'QUEUE_FULL' && e.statusCode === 503,
+  );
+  releases.forEach((release) => release());
+  await Promise.all([...active, ...waiting]);
+});
+
+test('an aborted waiter is removed and never runs', async () => {
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  const active = withGate('cancelled', () => hold, { concurrency: 1 });
+  const controller = new AbortController();
+  let ran = false;
+  const waiting = withGate('cancelled', async () => { ran = true; }, {
+    concurrency: 1, signal: controller.signal,
+  });
+  await sleep(5);
+  assert.deepEqual(gateDepth('cancelled'), { active: 1, queued: 1 });
+  controller.abort();
+
+  await assert.rejects(waiting, (e: any) => isRequestQueueError(e) && e.code === 'CANCELLED');
+  assert.deepEqual(gateDepth('cancelled'), { active: 1, queued: 0 });
+  assert.equal(ran, false);
+  release();
+  await active;
+});
+
+test('a waiter times out and leaves no queued entry', async () => {
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  const active = withGate('deadline', () => hold, { concurrency: 1 });
+
+  await assert.rejects(
+    withGate('deadline', async () => {}, { concurrency: 1, maxWaitMs: 15 }),
+    (e: any) => isRequestQueueError(e) && e.code === 'QUEUE_TIMEOUT' && e.statusCode === 503,
+  );
+  assert.deepEqual(gateDepth('deadline'), { active: 1, queued: 0 });
+  release();
+  await active;
+});
+
+test('minimum spacing survives an idle moment between sequential operations', async () => {
+  const started: number[] = [];
+  await withGate('sequential-pacing', async () => { started.push(Date.now()); }, { minGapMs: 35 });
+  await withGate('sequential-pacing', async () => { started.push(Date.now()); }, { minGapMs: 35 });
+  assert.ok(started[1] - started[0] >= 30, `sequential gap was ${started[1] - started[0]}ms`);
+});
+
+test('the wait deadline includes politeness spacing before the operation starts', async () => {
+  await withGate('pacing-deadline', async () => {}, { minGapMs: 50 });
+  let ran = false;
+  await assert.rejects(
+    withGate('pacing-deadline', async () => { ran = true; }, { minGapMs: 50, maxWaitMs: 10 }),
+    (e: any) => isRequestQueueError(e) && e.code === 'QUEUE_TIMEOUT' && e.statusCode === 503,
+  );
+  assert.equal(ran, false);
 });

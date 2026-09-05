@@ -31,8 +31,22 @@ export interface SourceVerdict {
   reason: string;
   fix: string;
   ok: boolean;
+  /** Local scheduler pressure prevented a source check; no source health was changed. */
+  deferred?: boolean;
   /** What the watchdog changed by itself, if anything. */
   action?: 'followed-move';
+}
+
+export function deferredSourceVerdict(
+  src: Pick<SourceVerdict, 'id' | 'name'>,
+  bare: { deferred?: boolean } | undefined,
+  smoke: { ok: boolean; deferred?: boolean },
+): SourceVerdict | null {
+  if (!bare?.deferred && !smoke.deferred) return null;
+  return {
+    id: src.id, name: src.name, code: 'unknown', ok: false, deferred: true,
+    reason: 'Deferred because local request capacity was unavailable.', fix: '',
+  };
 }
 
 export interface WatchdogResult {
@@ -133,6 +147,11 @@ async function sweep(opts: { autoFix?: boolean }): Promise<WatchdogResult> {
 
     const bare = src.base ? await probeBase(src.base) : undefined;
     const smoke = await smokeTest(src);
+    const deferred = deferredSourceVerdict(src, bare, smoke);
+    if (deferred) {
+      verdicts.push(deferred);
+      continue;
+    }
     // The adapter's own result and whether this source is solver-fronted are both live evidence, and both
     // outrank a bare homepage request. Without them a Cloudflare-protected site that works perfectly reads
     // as a 403 block, because the probe deliberately does not use the solver.

@@ -1,9 +1,8 @@
 // Which extension sources actually get registered.
 //
-// This is the rule that decides whether the feature is usable at all rather than a nicety: cross-source
-// search (GET /api/sources/search-all) fans out to EVERY registered source with a 20s timeout each, so
-// registering the several hundred sources a full extension set exposes would make search unusable and would
-// hit every one of those sites at once. Hence opt-in per source, plus a hard cap.
+// This is the rule that decides whether the feature is usable at all rather than a nicety: every selected
+// source must remain available. Outbound work is bounded by the request scheduler rather
+// than by hiding adapters, while Providers' disabled state remains an operator choice across reloads.
 //
 // Skipped automatically unless TEST_DATABASE_URL is set (CI provides a throwaway Postgres service).
 import test from 'node:test';
@@ -27,6 +26,7 @@ async function setup() {
   const loader = await import('../src/lib/sources/loader');
   await migrate();
   await q('DELETE FROM suwayomi_sources');
+  await q(`DELETE FROM source_health WHERE source_id LIKE 'sw:%'`);
   return { q, reg, loader };
 }
 
@@ -88,22 +88,27 @@ test('extension source registration', { skip: DSN ? false : 'set TEST_DATABASE_U
     assert.equal(adapter!.lang, 'en', 'the language must reach the adapter too, or it joins every group');
   });
 
-  await t.test('the cap is enforced, and what it dropped is reported', async () => {
+  await t.test('more than 25 selected sources register without changing Providers disables', async () => {
     reset();
-    const { env } = await import('../src/env');
-    const original = env.SUWAYOMI_MAX_SOURCES;
-    (env as { SUWAYOMI_MAX_SOURCES: number }).SUWAYOMI_MAX_SOURCES = 2;
-    try {
-      await q('DELETE FROM suwayomi_sources');
-      await reg.loadSuwayomiSources(async () => remote(5)); // remembers them, all disabled
-      await q('UPDATE suwayomi_sources SET enabled = true');
-      const r = await reg.loadSuwayomiSources(async () => remote(5));
-      assert.equal(r.registered, 2);
-      assert.equal(r.skipped, 3, 'over-cap sources must be counted, not silently dropped');
-      assert.equal(loader.listSources().length, 2);
-    } finally {
-      (env as { SUWAYOMI_MAX_SOURCES: number }).SUWAYOMI_MAX_SOURCES = original;
-    }
+    await q('DELETE FROM suwayomi_sources');
+    await reg.loadSuwayomiSources(async () => remote(40)); // remembers them, all unselected
+    await q('UPDATE suwayomi_sources SET enabled = true');
+    await q(`INSERT INTO source_health (source_id, disabled) VALUES ('sw:0',true),('sw:24',true)`);
+
+    const r = await reg.loadSuwayomiSources(async () => remote(40));
+    assert.equal(r.registered, 40, 'the former 25-source ceiling must not hide installed extensions');
+    assert.equal(loader.listSources().length, 40);
+    assert.ok(loader.getSource('sw:39')?.search, 'a source beyond the old cap must be a usable adapter');
+
+    const disabled = async () => (await q<{ source_id: string }>(
+      `SELECT source_id FROM source_health WHERE disabled = true AND source_id LIKE 'sw:%' ORDER BY source_id`,
+    )).map((x) => x.source_id);
+    assert.deepEqual(await disabled(), ['sw:0', 'sw:24']);
+
+    reset();
+    assert.equal((await reg.loadSuwayomiSources(async () => remote(40))).registered, 40);
+    assert.deepEqual(await disabled(), ['sw:0', 'sw:24'],
+      'registration must never auto-clear or invent an operator disable');
   });
 
   await t.test('an unreachable extension server registers nothing and does not throw', async () => {
@@ -119,4 +124,5 @@ test('extension source registration', { skip: DSN ? false : 'set TEST_DATABASE_U
   });
 
   await q('DELETE FROM suwayomi_sources');
+  await q(`DELETE FROM source_health WHERE source_id LIKE 'sw:%'`);
 });

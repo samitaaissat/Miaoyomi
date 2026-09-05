@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { executePlugin } from './executor.mjs';
 import { EngineError } from './errors.mjs';
+import { applySourceCompatibility } from './source-compatibility.mjs';
 const modules = new Set(['cheerio', 'htmlparser2', 'dayjs', '@libs/fetch', '@libs/storage', '@libs/novelStatus', '@libs/defaultCover', '@libs/isAbsoluteUrl', '@libs/filterInputs', '@/types/constants']);
 export function capabilityReason(script, entry) {
   for (const match of script.matchAll(/require\(["']([^"']+)["']\)/g)) if (!modules.has(match[1])) return `Unsupported module: ${match[1]}`;
@@ -20,8 +21,9 @@ export class Registry {
     const manifest = JSON.parse(await readFile(new URL('registry.json', vendorDir), 'utf8'));
     for (const entry of manifest.sources) {
       if (!/^[a-zA-Z0-9_. -]+$/.test(entry.id)) throw Error('Invalid pinned source ID');
-      const script = await readFile(new URL(`scripts/${entry.id}.js`, vendorDir), 'utf8');
-      const digest = createHash('sha256').update(script).digest('hex');
+      const publishedScript = await readFile(new URL(`scripts/${entry.id}.js`, vendorDir), 'utf8');
+      const digest = createHash('sha256').update(publishedScript).digest('hex');
+      const script = applySourceCompatibility(entry.id, publishedScript);
       const reason = digest !== entry.digest || (registry.state[entry.id]?.digest && registry.state[entry.id].digest !== digest) ? 'Pinned script digest mismatch; review the source update before activation' : capabilityReason(script, entry);
       registry.entries.set(entry.id, { script, digest, source: { id: entry.id, name: entry.name, lang: entry.lang, site: entry.site, version: entry.version, enabled: registry.state[entry.id]?.enabled === true, supported: !reason, ...(reason ? { reason } : {}), supportsLatest: /showLatestNovels/.test(script) } });
     }

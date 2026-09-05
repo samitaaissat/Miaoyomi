@@ -10,25 +10,13 @@ export function solverEndpoint(value) {
   return url.origin;
 }
 
-// The operator-configured solver is a trusted browser service. It handles its own
-// DNS, redirects and subresources; the broker validates both boundary URLs.
-export async function solvePage({ endpoint, fetch, url, method, body, contentType, cookies, signal, timeoutMs, maxBytes }) {
-  if (!endpoint) throw unavailable('not configured');
-  if (method !== 'GET' && (method !== 'POST' || !/^application\/x-www-form-urlencoded(?:\s*;|$)/i.test(contentType || ''))) {
-    throw new EngineError('SOLVER_UNSUPPORTED', 'FlareSolverr supports GET and application/x-www-form-urlencoded POST requests');
-  }
+async function command({ endpoint, fetch, payload, signal, timeoutMs, responseLimit }) {
   const solverSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
   try {
     const response = await fetch(`${endpoint}/v1`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'error', signal: solverSignal,
-      // FlareSolverr starts maxTimeout after creating Chrome, then tears Chrome
-      // down before returning. Leave lifecycle time inside our HTTP deadline.
-      body: JSON.stringify({ cmd: method === 'POST' ? 'request.post' : 'request.get', url, ...(method === 'POST' ? { postData: body || '' } : {}), cookies, maxTimeout: Math.max(1, Math.floor(timeoutMs * 5 / 6)) }),
+      body: JSON.stringify(payload),
     });
-    if (!response.ok) { await response.body?.cancel(); throw unavailable(`HTTP ${response.status}`); }
-    // JSON escaping can expand a character to six bytes. Bound the envelope as
-    // well as the decoded page instead of calling unbounded response.json().
-    const limit = maxBytes * 6 + 1024 * 1024;
     const reader = response.body?.getReader();
     if (!reader) throw unavailable('empty response');
     let size = 0; const chunks = [];
@@ -38,13 +26,44 @@ export async function solvePage({ endpoint, fetch, url, method, body, contentTyp
         const { done, value } = await reader.read();
         if (done) break;
         size += value.byteLength;
-        if (size > limit) { await reader.cancel(); throw new EngineError('RESPONSE_LIMIT', 'FlareSolverr response exceeds body limit'); }
+        if (size > responseLimit) { await reader.cancel(); throw new EngineError('RESPONSE_LIMIT', 'FlareSolverr response exceeds body limit'); }
         chunks.push(Buffer.from(value));
       }
     } finally { reader.releaseLock(); }
     let data;
     try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw unavailable('invalid JSON response'); }
-    if (data?.status !== 'ok' || !data.solution) throw unavailable(String(data?.message || 'no solution').slice(0, 300));
+    const message = String(data?.message || '').slice(0, 300);
+    if (!response.ok) throw unavailable(`HTTP ${response.status}${message ? `: ${message}` : ''}`);
+    if (data?.status !== 'ok') throw unavailable(message || 'command failed');
+    return data;
+  } catch (error) {
+    if (solverSignal.aborted) throw new EngineError('DEADLINE', 'FlareSolverr request deadline exceeded', 504);
+    if (error instanceof EngineError) throw error;
+    throw unavailable(error.message);
+  }
+}
+
+// The operator-configured solver is a trusted browser service. It handles its own
+// DNS, redirects and subresources; the broker validates both boundary URLs.
+export async function solvePage({ endpoint, fetch, url, method, body, contentType, cookies, session, sessionTtlMinutes, signal, timeoutMs, maxBytes }) {
+  if (!endpoint) throw unavailable('not configured');
+  if (method !== 'GET' && (method !== 'POST' || !/^application\/x-www-form-urlencoded(?:\s*;|$)/i.test(contentType || ''))) {
+    throw new EngineError('SOLVER_UNSUPPORTED', 'FlareSolverr supports GET and application/x-www-form-urlencoded POST requests');
+  }
+  // JSON escaping can expand a character to six bytes. Bound the envelope as
+  // well as the decoded page instead of calling unbounded response.json().
+  const data = await command({
+    endpoint, fetch, signal, timeoutMs, responseLimit: maxBytes * 6 + 1024 * 1024,
+    payload: {
+      cmd: method === 'POST' ? 'request.post' : 'request.get', url,
+      ...(method === 'POST' ? { postData: body || '' } : {}), cookies, session,
+      session_ttl_minutes: sessionTtlMinutes,
+      // The HTTP deadline includes JSON transfer and parsing around the browser work.
+      maxTimeout: Math.max(1, Math.floor(timeoutMs * 5 / 6)),
+    },
+  });
+  try {
+    if (!data.solution) throw unavailable('no solution');
     const solution = data.solution;
     if (!Number.isInteger(solution.status) || typeof solution.url !== 'string' || typeof solution.response !== 'string' || !solution.response.trim()) throw unavailable('invalid or empty solution');
     const page = Buffer.from(solution.response, 'utf8');
@@ -55,8 +74,12 @@ export async function solvePage({ endpoint, fetch, url, method, body, contentTyp
     delete headers['content-encoding']; delete headers['content-length']; delete headers['set-cookie'];
     return { status: solution.status, headers, body: page, url: solution.url, cookies: solution.cookies, userAgent: solution.userAgent };
   } catch (error) {
-    if (solverSignal.aborted) throw new EngineError('DEADLINE', 'FlareSolverr request deadline exceeded', 504);
     if (error instanceof EngineError) throw error;
     throw unavailable(error.message);
   }
+}
+
+export async function destroySession({ endpoint, fetch, session, signal, timeoutMs = 10_000 }) {
+  if (!endpoint || !session) return;
+  await command({ endpoint, fetch, signal, timeoutMs, responseLimit: 1024 * 1024, payload: { cmd: 'sessions.destroy', session } });
 }
