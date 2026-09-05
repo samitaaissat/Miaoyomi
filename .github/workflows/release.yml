@@ -143,7 +143,7 @@ jobs:
           done
           digest=$(awk '/^Digest:/ && !d {print $2; d=1}' <<<"$out")
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ matrix.image }}
           subject-digest: ${{ steps.index.outputs.digest }}
