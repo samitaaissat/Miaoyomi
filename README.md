@@ -4,15 +4,15 @@ A self-hosted manga and webnovel PWA, built as a small downstream of [Uchiyomi](
 
 The deployment targets your **x86_64 Proxmox node**, behind your existing reverse proxy. One command creates an unprivileged **Alpine 3.24 LXC** and installs Node 24, PostgreSQL 18, Suwayomi and Miaoyomi as native OpenRC services. By default, it also runs the [official community FlareSolverr installer](https://community-scripts.org/scripts/flaresolverr) to create a **separate Debian LXC** and connects both manga components to it. No Docker or other container runtime runs inside either LXC. It retains Fastify and Uchiyomi accounts. A private LNReader/QuickJS runtime supplies prose sources; Suwayomi supplies manga extensions.
 
-Copy this checkout to the Proxmox node, then run there as root:
+Run this single command as root in the **Proxmox node shell**:
 
 ```sh
-bash /root/Miaoyomi/scripts/proxmox/create-lxc.sh --source-dir /root/Miaoyomi
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/samitaaissat/Miaoyomi/main/scripts/proxmox/create-lxc.sh)"
 ```
 
-The wizard configures resources, storage, network, HTTPS origin and an optional read-only existing manga mount. The app defaults to 4 cores, 6144 MiB RAM and 32 GiB disk; the official FlareSolverr wizard allocates its own guest. Use `--flaresolverr-ctid ID` to reuse a local native solver, `--flaresolverr-url URL` for an existing endpoint, or `--flaresolverr no` to disable it. `--nesting yes` enables the app LXC feature if needed; the solver keeps its upstream feature settings. Point your proxy at the app guest's selected port (default 8080), open the HTTPS hostname, create the administrator, then enable sources. Inside the app guest, use `miaoyomi status`, `miaoyomi backup` and `miaoyomi update --source-dir /path/to/replacement/checkout` for maintenance. Git-based installs can use `miaoyomi update` with their saved source.
+The wizard fetches this repository's `main` branch and configures resources, storage, network, HTTPS origin and an optional read-only existing manga mount. The app defaults to 4 cores, 6144 MiB RAM and 32 GiB disk; the official FlareSolverr wizard allocates its own guest. Use `--flaresolverr-ctid ID` to reuse a local native solver, `--flaresolverr-url URL` for an existing endpoint, or `--flaresolverr no` to disable it. `--nesting yes` enables the app LXC feature if needed; the solver keeps its upstream feature settings. Point your proxy at the app guest's selected port (default 8080), open the HTTPS hostname, create the administrator, then enable sources. Inside the app guest, use `miaoyomi status`, `miaoyomi backup` and `miaoyomi update` for maintenance; updates use the saved repository and branch.
 
-The [remote one-liner](docs/proxmox-lxc.md#git-source-and-remote-one-liner) becomes usable once these installer changes are published to the configured GitHub remote. Native creation, boot and updates still require acceptance testing on a real Proxmox node. Existing deployments can keep the [Compose alternative](docs/proxmox-lxc.md#compose-alternative); native installation does not migrate Compose data.
+No release tag, GitHub release, image publication or manually copied checkout is required for the native installation. Tags are optional when you want to pin a particular revision; see [source selection and updates](docs/proxmox-lxc.md#git-source-and-remote-one-liner). Native creation, boot and updates still require acceptance testing on a real Proxmox node. Existing deployments can keep the [Compose alternative](docs/proxmox-lxc.md#compose-alternative); native installation does not migrate Compose data.
 
 ## Compose
 

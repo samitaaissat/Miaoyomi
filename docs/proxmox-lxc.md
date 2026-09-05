@@ -31,13 +31,15 @@ flowchart LR
     Solver --> Websites
 ```
 
-## One command from a local checkout
+## One-command installation
 
-Copy this **Miaoyomi checkout** to the Proxmox node, for example `/root/Miaoyomi`. Then run:
+Run this command as root in an interactive **Proxmox node shell**:
 
 ```sh
-bash /root/Miaoyomi/scripts/proxmox/create-lxc.sh --source-dir /root/Miaoyomi
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/samitaaissat/Miaoyomi/main/scripts/proxmox/create-lxc.sh)"
 ```
+
+The published installer defaults to `https://github.com/samitaaissat/Miaoyomi.git` and `main`, fetches its own source, and saves that repository/ref for `miaoyomi update`. No tag, GitHub release or GHCR image is needed. Keep the terminal open while the two interactive wizards and installation run. Have your storage/network settings and public HTTPS hostname ready.
 
 The wizard asks for the app container ID, hostname, CPU/RAM/disk, root and template storage, bridge, DHCP or static IPv4, optional VLAN, public HTTPS origin, app port, optional existing manga directory and solver choice. It shows the chosen settings before creating the app container. App defaults are **4 cores, 6144 MiB RAM and 32 GiB disk**, independent of the solver. Add space for generated books and update backups. These are starting allocations, not measured capacity guarantees.
 
@@ -45,7 +47,7 @@ By default, **FlareSolverr is enabled** and its official interactive wizard crea
 
 Keep the prefilled host post-install hook in the official wizard: it reports the actual new CT ID, even if you change the ID in the wizard. If that receipt is missing or invalid, the wrapper stops without guessing a container. Inspect `pct list` and reuse the intended solver explicitly on a subsequent install.
 
-The source directory is a path **on the Proxmox node**. It must contain this downstream's `bff/`, `web/`, `novel-engine/` and installer files. The source transfer includes uncommitted changes and excludes `.env`/`.env.*`, `.npmrc`, dependency/build directories, caches and VCS metadata. Installation generates new secrets in the guest. Existing libraries are attached separately; they are not installation sources.
+If you prefer to install an unpublished local checkout, copy it to `/root/Miaoyomi` on the node and run `bash /root/Miaoyomi/scripts/proxmox/create-lxc.sh --source-dir /root/Miaoyomi`. It must contain this downstream's `bff/`, `web/`, `novel-engine/` and installer files. Local source transfer includes uncommitted changes and excludes `.env`/`.env.*`, `.npmrc`, dependency/build directories, caches and VCS metadata. Installation generates new secrets in the guest. Existing libraries are attached separately; they are not installation sources.
 
 You can review a configured operation with `--dry-run`; it validates inputs and prints the creation command without checking live host availability or fetching remote sources. `--yes` accepts the app configuration for unattended creation, but **cannot automate the official FlareSolverr wizard**. Combine it with an existing solver ID/URL or `--flaresolverr no`; `--yes` with a new solver is rejected. For example, with your own addresses and storage names:
 
@@ -84,23 +86,23 @@ The installer rejects an existing app container ID. If app setup fails after cre
 
 ## Git source and remote one-liner
 
-This checkout's configured remote is `https://github.com/samitaaissat/Miaoyomi.git`. The commands below require these installer changes and application sources to be available at the selected remote ref; local edits are not uploaded by running the installer. **Do not use the original Uchiyomi repository or its image as the installation source**: they lack Miaoyomi's novel features.
+The one-command installer uses the public `samitaaissat/Miaoyomi` repository and tracks `main` by default. It builds the app, frontend and novel engine from their committed lockfiles inside Alpine. Docker image builds and release workflows do not gate this native path.
 
-After publishing the changes, the local installer can fetch that source:
-
-```sh
-bash /root/Miaoyomi/scripts/proxmox/create-lxc.sh \
-  --repo https://github.com/samitaaissat/Miaoyomi.git --ref main
-```
-
-Only **after these changes are published at `main`**, this one command on the Proxmox node starts the complete interactive installation:
+To supply options to the remote command, put `--` before them. For example, preview an installation using an existing solver:
 
 ```sh
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/samitaaissat/Miaoyomi/main/scripts/proxmox/create-lxc.sh)" -- \
-  --repo https://github.com/samitaaissat/Miaoyomi.git --ref main
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/samitaaissat/Miaoyomi/main/scripts/proxmox/create-lxc.sh)" -- --dry-run --public-origin https://read.example.com --flaresolverr-ctid 121
 ```
 
-Use a reviewed release ref for repeatable installation. For a repository requiring credentials, prepare a local checkout on the node and use `--source-dir`; do not put credentials in the URL.
+Tags are optional. For a reproducible install, select a published commit or tag in both the download URL and `--ref`. This example selects the initial native installer commit:
+
+```sh
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/samitaaissat/Miaoyomi/d7d18886e917f33a882a03a03dbfd33039e29e82/scripts/proxmox/create-lxc.sh)" -- --ref d7d18886e917f33a882a03a03dbfd33039e29e82
+```
+
+`miaoyomi update` follows the saved ref: `main` gets new commits, while a commit/tag remains pinned. Use `miaoyomi update --ref main` to start following the branch, or supply a new reviewed tag/commit explicitly. A Miaoyomi ref does not pin Alpine package updates or the independently maintained community FlareSolverr installer.
+
+For a different Miaoyomi fork, pass `--repo HTTPS_URL --ref REF`. For a repository requiring credentials, prepare a local checkout on the node and use `--source-dir`; do not put credentials in the URL. The original Uchiyomi repository lacks Miaoyomi's novel features and is not a valid source.
 
 Git-source installation installs Git on the Proxmox node if it is missing. Alpine package setup enables the matching `community` repository when needed for npm and Java.
 

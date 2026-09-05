@@ -48,9 +48,11 @@ usage() {
 Create an unprivileged Alpine LXC with the native Miaoyomi stack (run as root on Proxmox VE 8/9).
 
   bash scripts/proxmox/create-lxc.sh --source-dir /root/Miaoyomi
-  bash create-lxc.sh --repo https://YOUR-DOWNSTREAM-REPOSITORY.git --ref main
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/samitaaissat/Miaoyomi/main/scripts/proxmox/create-lxc.sh)"
 
 Source (choose one):
+  With no source option, a remote invocation uses samitaaissat/Miaoyomi on main.
+  A script run from a local Miaoyomi checkout uses that checkout instead.
   --source-dir PATH       Source checkout on the Proxmox node; includes uncommitted code
   --repo HTTPS_URL        Miaoyomi downstream Git URL (not the original Uchiyomi repository)
   --ref REF              Branch, tag or commit to install and save for updates [main]

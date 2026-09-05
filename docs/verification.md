@@ -38,7 +38,7 @@ Socktainer's compatibility layer exposed three local limits: it did not consiste
 
 The full backup script successfully archived PostgreSQL, configuration, CBZ/EPUB directories, enabled novel sources and Suwayomi state. Restore initially met macOS bind-mount ownership/time restrictions. Running the same restore implementation with disposable named volumes completed. The restored database had the same 41 public tables and server-settings row as the backup; the actual EPUB and CBZ bytes matched exactly. Empty top-level filesystem `lost+found` directories are preserved and tolerated; populated destinations and corrupt manifests are refused.
 
-The committed Linux workflow additionally boots the actual Compose topology, seeds standard books, takes a full backup and restores it into a separate project with empty bind directories. It checks retained account setup state and byte-identical CBZ/EPUB contents. **That remote CI workflow has been added but has not been run by this task.**
+The committed Linux workflow additionally boots the actual Compose topology, seeds standard books, takes a full backup and restores it into a separate project with empty bind directories. The [first published run](https://github.com/samitaaissat/Miaoyomi/actions/runs/33967318606) reached restored service health and account setup checks, then failed while comparing restored EPUB bytes because the runner user could not read the file. That Compose verification failure is separate from the successful native-installer job.
 
 ## Native Proxmox installer boundary
 
@@ -52,6 +52,10 @@ The host wrapper manages address discovery and delegates app/Suwayomi configurat
 
 Local verification on 2026-09-05 passed: Bash syntax and ShellCheck for both installers; **54 host/guest behavior tests**; **9 BFF solver, concurrency and manga-page regressions**; the BFF TypeScript build; and the real-checkout installer dry run. The installer tests cover cancellation, container identity, inter-LXC connection failure, configuration preservation, manager replacement, log permissions and interrupted backup/cutover recovery. CI runs the installer lint and behavior checks in its `native-lxc-scripts` job.
 
+After publication of `main` at `d7d18886e917f33a882a03a03dbfd33039e29e82`, the live raw installer passed Bash syntax, `--help` and remote-mode `--dry-run` checks from outside a checkout. An anonymous shallow clone/fetch succeeded. Its source archive retained all 13 required installer/build inputs and all 278 vendored novel scripts with matching registry hashes; all three lockfiles resolve packages through the public npm registry. The [published native-installer CI job](https://github.com/samitaaissat/Miaoyomi/actions/runs/33967318606) passed. Native installation does not require a release tag or image publication.
+
+The remote-path follow-up adds an automated check for the default public repository and explicit ref selection outside a checkout. Both installers pass Bash syntax and ShellCheck, and the combined host/guest suite passes **55 tests**.
+
 These checks do not create a real container, boot Alpine or demonstrate actual OpenRC supervision. The following remain **real-host acceptance checks**:
 
 1. Create the app guest from the node; verify its unprivileged configuration, DHCP/static networking, selected storage, optional nesting setting and read-only collection mapping.
@@ -61,7 +65,7 @@ These checks do not create a real container, boot Alpine or demonstrate actual O
 5. Exercise app update and backup on disposable guests; verify retained settings/progress/books/solver metadata. Update the solver using the official updater, change its address and reconnect. Verify both manga clients use the new endpoint and an unreachable replacement preserves the prior connection.
 6. Restore complete backups of both CTs and the separately protected bind mounts. Reconnect after migration or a changed address/CT ID. App archives alone cannot restore the solver guest.
 
-This macOS/Apple Silicon workspace cannot establish those Proxmox acceptance results. No native deployment, cluster migration or native restore is claimed here. These installer changes have not been published by this task; the documented remote one-liner requires them at the selected GitHub ref. Follow the [native installation guide](proxmox-lxc.md) for commands and the maintenance/recovery boundary.
+This macOS/Apple Silicon workspace cannot establish those Proxmox acceptance results. No native deployment, cluster migration or native restore is claimed here. The installer and its source are now available from the public GitHub `main` branch. Follow the [native installation guide](proxmox-lxc.md) for the one-command installation and maintenance/recovery boundary.
 
 ## Reproduce
 

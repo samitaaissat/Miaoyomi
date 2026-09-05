@@ -34,6 +34,20 @@ test('the published bash -c transport can show help without BASH_SOURCE', () => 
   assert.match(result.stdout, /Create an unprivileged Alpine LXC/);
 });
 
+test('remote invocation outside a checkout defaults to the public repository and retains an explicit ref', t => {
+  const cwd = mkdtempSync(join(tmpdir(), 'miaoyomi-remote-cli-'));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  for (const ref of [undefined, 'd7d18886e917f33a882a03a03dbfd33039e29e82']) {
+    const args = ['--dry-run', '--public-origin', 'https://read.example.com'];
+    if (ref) args.push('--ref', ref);
+    const result = spawnSync('bash', ['-c', readFileSync(script, 'utf8'), '--', ...args], { cwd, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.stdout.includes(`Source: https://github.com/samitaaissat/Miaoyomi.git (ref ${ref || 'main'})`));
+    assert.match(result.stdout, /official community wizard creates a separate Debian LXC/);
+    assert.match(result.stdout, /pct create/);
+  }
+});
+
 test('unknown and missing options fail with actionable errors', () => {
   assert.match(run(['--unknown']).stderr, /Unknown option/);
   assert.match(run(['--memory']).stderr, /requires a value/);
