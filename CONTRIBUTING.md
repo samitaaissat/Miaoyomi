@@ -9,20 +9,15 @@ Thanks for your interest. Bug reports, feature ideas, and pull requests are all 
 - Site-specific source adapters are deliberately **not** in this repo. The loader registers any compiled
   CommonJS plugin mounted at `/sources`; the contract is in `bff/src/lib/sources/loader.ts`.
 
-## Run it locally
+## Run Miaoyomi locally
 ```bash
-cp .env.example .env      # point LIBRARY_PATH at your manga
-docker compose up -d
+cp .env.miaoyomi.example .env
+MIAOYOMI_COMPOSE_MODE=dev bash scripts/miaoyomi-setup.sh --config-only
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
-Open http://localhost:8080, create the admin account, and add a source by URL.
-
-That builds `Dockerfile.aio` — the single container that is actually released, and the only layout the
-end-to-end tests drive. The deprecated two-container split is still buildable from source when you need to
-touch `web/nginx.conf` or its Dockerfile:
-
-```bash
-docker compose --profile split up -d     # adds yomi-bff + yomi-web on http://localhost:8081
-```
+Open http://localhost:8080 and create the administrator. The development overlay builds the app and novel
+engine from this checkout; it is intentionally layered over the same database, volumes and sidecars used by
+the prebuilt deployment.
 
 ## Pull requests
 - Keep changes focused: one topic per PR.

@@ -14,6 +14,15 @@ spec.loader.exec_module(backup)
 
 
 class BackupPreflightTest(unittest.TestCase):
+    def test_backup_helper_uses_the_host_selected_app_variant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = self.config(root)
+            config['services']['app']['image'] = 'ghcr.io/samitaaissat/miaoyomi:latest'
+            command = backup.mount_command(config, 'config', readonly=True)
+            self.assertNotIn('--platform', command)
+            self.assertEqual(command[-1], 'ghcr.io/samitaaissat/miaoyomi:latest')
+
     def test_empty_filesystem_housekeeping_is_not_a_restore_payload(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

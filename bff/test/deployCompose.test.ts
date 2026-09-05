@@ -43,7 +43,7 @@ function suwayomiBlock(file: string): string {
 const instructions = (block: string): string =>
   block.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
 
-const FILES = ['deploy/docker-compose.yml', 'deploy/docker-compose.external-db.yml', 'deploy/docker-compose.split.yml', 'docker-compose.yml'];
+const FILES = ['deploy/docker-compose.yml', 'deploy/docker-compose.external-db.yml', 'deploy/docker-compose.split.yml'];
 
 test('the extension engine is told never to download into its own volume', () => {
   for (const file of FILES) {

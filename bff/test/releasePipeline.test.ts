@@ -19,30 +19,42 @@ const REPO = join(__dirname, '..', '..');
 const read = (p: string) => readFileSync(join(REPO, p), 'utf8');
 const code = (s: string) => s.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
 
-test('arm64 is built on an arm64 runner, never emulated, and merged into one index', () => {
+test('Miaoyomi app and novel-engine are built on native runners and merged into matching multi-arch indexes', () => {
   const y = read('.github/workflows/release.yml');
   const wf = parseYaml(y);
   // Reintroduce by adding setup-qemu-action back: the next release hangs at exactly the timeout again.
   assert.ok(!/setup-qemu/.test(code(y)), 'release.yml uses QEMU emulation again');
   assert.match(code(y), /ubuntu-24\.04-arm/, 'no native arm64 runner');
   assert.match(code(y), /push-by-digest=true/, 'architectures are not pushed by digest, so the tag can point at one of them');
+  assert.ok(wf.jobs.prepare, 'no preparation job normalizes manually selected branch names into Docker tags');
+  assert.equal(wf.jobs.build.needs, 'prepare', 'the build label does not use the normalized tag');
   assert.ok(wf.jobs.merge, 'no merge job: nothing writes the tag over both architectures');
-  assert.match(code(y), /imagetools create -t "\$\{\{ matrix\.image \}\}:\$\{\{ github\.ref_name \}\}"/, 'the merge job does not write the version tag');
+  assert.deepEqual(wf.jobs.merge.needs, ['build', 'prepare']);
+  assert.deepEqual(wf.jobs.latest.needs, ['merge', 'prepare']);
+  assert.equal(wf.jobs.latest.if, "github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')", 'latest is not restricted to main and version-tag releases');
+  assert.match(code(y), /IMAGE_TAG:\s*\$\{\{ needs\.prepare\.outputs\.image_tag \}\}/, 'merged images do not use the normalized tag');
+  assert.match(code(y), /sed 's\/\[\^A-Za-z0-9_.-\]\/-\/g'/, 'manual branch names are not normalized into valid Docker tags');
+  assert.match(code(y), /imagetools create -t "\$\{\{ matrix\.image \}\}:\$IMAGE_TAG"/, 'the merge job does not write the version tag');
   assert.match(code(y), /grep -q "linux\/\$arch"/, 'the merge job does not check both architectures are in the index');
   // Reintroduce by piping `imagetools inspect` into grep -q or an early-exiting awk: buildx dies of SIGPIPE,
   // pipefail makes that the step's status, and every merge fails after every build succeeded -- the first
   // run of this pipeline, exactly.
   assert.ok(!/imagetools inspect[^\n]*\|\s*(grep|awk|head)/.test(code(y)), 'release.yml pipes an imagetools inspect into a reader that can close the pipe early');
   // The gate: latest moves only after every image is merged. Reintroduce by pointing `needs` at build.
-  assert.equal(wf.jobs.latest.needs, 'merge', 'latest is not gated on the merged indexes');
-  assert.equal(wf.jobs.merge.needs, 'build');
+  assert.ok(Array.isArray(wf.jobs.latest.needs) && wf.jobs.latest.needs.includes('merge'), 'latest is not gated on the merged indexes');
   for (const j of ['build', 'merge', 'latest']) assert.ok(wf.jobs[j]['timeout-minutes'], `${j} has no timeout`);
   assert.match(y, /attest-build-provenance/, 'no provenance attestation');
   assert.equal(wf.permissions['id-token'], 'write', 'attestations need id-token: write');
   assert.equal(wf.permissions.attestations, 'write');
-  // Every image, both architectures.
-  assert.deepEqual(wf.jobs.build.strategy.matrix.service, ['bff', 'web', 'aio']);
+  // Every published Miaoyomi image, both architectures. The retained upstream BFF/web/aio images are not
+  // part of this downstream deployment, so publishing any of them would leave the actual Compose images
+  // unavailable after a release.
+  assert.deepEqual(wf.jobs.build.strategy.matrix.service, ['app', 'novel-engine']);
   assert.deepEqual(wf.jobs.build.strategy.matrix.arch, ['amd64', 'arm64']);
+  assert.match(code(y), /Dockerfile\.miaoyomi/, 'the published app does not use Miaoyomi\'s Dockerfile');
+  assert.match(code(y), /novel-engine\/Dockerfile/, 'the private novel engine is not published');
+  assert.match(code(y), /ghcr\.io\/\$\{\{ github\.repository_owner \}\}\/miaoyomi/, 'the app image is not published to this repository owner');
+  assert.match(code(y), /ghcr\.io\/\$\{\{ github\.repository_owner \}\}\/miaoyomi-novel-engine/, 'the novel-engine image is not published to this repository owner');
 });
 
 test('dependencies and actions are watched weekly, grouped so CI is not run thirty times', () => {

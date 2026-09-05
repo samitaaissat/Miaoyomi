@@ -1,0 +1,13 @@
+services:
+  app:
+    image: miaoyomi/app:local
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile.miaoyomi
+
+  novel-engine:
+    image: miaoyomi/novel-engine:local
+    pull_policy: build
+    build:
+      context: ./novel-engine

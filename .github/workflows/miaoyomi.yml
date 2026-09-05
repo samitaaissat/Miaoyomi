@@ -6,6 +6,21 @@ on:
 permissions:
   contents: read
 jobs:
+  native-lxc-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Validate native installer shell
+        run: |
+          bash -n scripts/proxmox/create-lxc.sh scripts/proxmox/miaoyomi-native.sh
+          shellcheck scripts/proxmox/create-lxc.sh scripts/proxmox/miaoyomi-native.sh
+      - name: Test native installer behavior with command stubs
+        run: node --test scripts/tests/proxmox-lxc.test.mjs scripts/tests/native-manager.test.mjs
   novel-runtime:
     runs-on: ubuntu-latest
     steps:
@@ -38,20 +53,22 @@ jobs:
   compose:
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      MIAOYOMI_COMPOSE_MODE: dev
     steps:
       - uses: actions/checkout@v4
       - run: bash scripts/miaoyomi-setup.sh --config-only
       - run: python3 -m unittest discover -s scripts/tests -v
-      - run: docker compose -f compose.yaml up -d --build --wait --wait-timeout 240
+      - run: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --wait --wait-timeout 240
       - run: python3 test/compose-smoke.py
-      - run: docker compose -f compose.yaml exec -T app node < test/seed-standard-books.cjs
+      - run: docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T app node < test/seed-standard-books.cjs
       - name: Full backup
         run: python3 scripts/miaoyomi-backup.py backup "$RUNNER_TEMP/miaoyomi-backup"
       - name: Restore into a separate empty project and empty bind paths
         run: |
-          docker compose -f compose.yaml stop
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml stop
           COMPOSE_PROJECT_NAME=miaoyomi-restore MANGA_LIBRARY_PATH="$RUNNER_TEMP/restored-manga" MANGA_DOWNLOAD_PATH="$RUNNER_TEMP/restored-downloads" NOVEL_LIBRARY_PATH="$RUNNER_TEMP/restored-novels" python3 scripts/miaoyomi-backup.py restore-empty "$RUNNER_TEMP/miaoyomi-backup"
-          COMPOSE_PROJECT_NAME=miaoyomi-restore MANGA_LIBRARY_PATH="$RUNNER_TEMP/restored-manga" MANGA_DOWNLOAD_PATH="$RUNNER_TEMP/restored-downloads" NOVEL_LIBRARY_PATH="$RUNNER_TEMP/restored-novels" docker compose -f compose.yaml up -d --wait --wait-timeout 240
+          COMPOSE_PROJECT_NAME=miaoyomi-restore MANGA_LIBRARY_PATH="$RUNNER_TEMP/restored-manga" MANGA_DOWNLOAD_PATH="$RUNNER_TEMP/restored-downloads" NOVEL_LIBRARY_PATH="$RUNNER_TEMP/restored-novels" docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait --wait-timeout 240
           curl --fail http://127.0.0.1:8080/healthz
           test "$(curl --fail --silent http://127.0.0.1:8080/api/setup/status)" = '{"needsSetup":false}'
           python3 - <<'PY'
@@ -67,12 +84,12 @@ jobs:
           PY
       - name: Diagnostics
         if: failure()
-        run: docker compose -f compose.yaml logs --tail=100
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml logs --tail=100
       - name: Stop disposable instances
         if: always()
         run: |
-          docker compose -f compose.yaml down --volumes
-          COMPOSE_PROJECT_NAME=miaoyomi-restore docker compose -f compose.yaml down --volumes
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml down --volumes
+          COMPOSE_PROJECT_NAME=miaoyomi-restore docker compose -f docker-compose.yml -f docker-compose.dev.yml down --volumes
   browser:
     runs-on: ubuntu-latest
     timeout-minutes: 15

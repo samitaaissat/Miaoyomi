@@ -23,7 +23,7 @@ curl -H "Authorization: Bearer $NOVEL_ENGINE_TOKEN" \
   http://localhost:4100/v1/sources/royalroad
 ```
 
-`docker build --platform linux/amd64 -t miaoyomi-novel-engine:local novel-engine` from the repository root creates the Node 24 Alpine image. It runs as the `node` user. Mount only a writable configuration directory at `/state`, owned by uid/gid **1000:1000** (initialize/chown externally when a volume provider does not preserve image-directory ownership); use a read-only root filesystem, dropped capabilities, `no-new-privileges`, and container CPU/memory limits in Compose. There is no library or database mount. The existing reverse proxy should reach the BFF, not this service.
+`docker build -t miaoyomi-novel-engine:local novel-engine` from the repository root creates the Node 24 Alpine image for the local host architecture. GitHub Actions publishes matching multi-architecture variants for deployments. It runs as the `node` user. Mount only a writable configuration directory at `/state`, owned by uid/gid **1000:1000** (initialize/chown externally when a volume provider does not preserve image-directory ownership); use a read-only root filesystem, dropped capabilities, `no-new-privileges`, and container CPU/memory limits in Compose. There is no library or database mount. The existing reverse proxy should reach the BFF, not this service.
 
 ## Contract
 

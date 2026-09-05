@@ -1,6 +1,7 @@
 // Thin client for FlareSolverr (headless-Chrome Cloudflare solver). Returns solved page HTML, and keeps the
 // latest cf_clearance cookies + user-agent per origin so the downloader can fetch images directly afterwards.
-const FS = (process.env.FLARESOLVERR_URL || 'http://yomi-flaresolverr:8191').replace(/\/$/, '');
+// Preserve the legacy default for unset environments; an explicit empty URL disables the integration.
+const FS = (process.env.FLARESOLVERR_URL ?? 'http://yomi-flaresolverr:8191').replace(/\/$/, '');
 
 interface Solution { url: string; status: number; response: string; cookies: Array<{ name: string; value: string }>; userAgent: string }
 const sessions = new Map<string, { cookie: string; userAgent: string }>();
@@ -29,6 +30,7 @@ function release(): void {
 }
 
 async function solve(cmd: 'request.get' | 'request.post', url: string, postData?: string): Promise<Solution> {
+  if (!FS) throw new Error('flaresolverr: disabled');
   await acquire();
   try {
     return await solveNow(cmd, url, postData);
@@ -121,6 +123,7 @@ export const solverUrl = (): string => FS;
  * four. This turns that into a single line on the health page.
  */
 export async function solverPing(timeoutMs = 5000): Promise<{ ok: boolean; version?: string; error?: string }> {
+  if (!FS) return { ok: false, error: 'disabled' };
   try {
     const r = await fetch(`${FS}/`, { signal: AbortSignal.timeout(timeoutMs) });
     if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };

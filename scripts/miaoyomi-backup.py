@@ -10,7 +10,22 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
-COMPOSE = ['docker', 'compose', '-f', str(ROOT / 'compose.yaml')]
+
+
+def compose_command():
+    mode = os.environ.get('MIAOYOMI_COMPOSE_MODE', 'production')
+    files = [ROOT / 'docker-compose.yml']
+    if mode == 'dev':
+        files.append(ROOT / 'docker-compose.dev.yml')
+    elif mode != 'production':
+        raise ValueError('MIAOYOMI_COMPOSE_MODE must be production or dev')
+    command = ['docker', 'compose']
+    for file in files:
+        command.extend(('-f', str(file)))
+    return command
+
+
+COMPOSE = compose_command()
 WRITERS = ('app', 'novel-engine', 'suwayomi')
 MOUNTS = {
     'config': ('app', '/config'), 'manga': ('app', '/library'),
@@ -58,7 +73,7 @@ def mount_command(config, name, readonly):
     if ',' in source:
         raise ValueError('Docker --mount cannot safely represent a path containing a comma')
     spec = f"type={mount['type']},source={source},target=/data" + (',readonly' if readonly else '')
-    return ['docker', 'run', '--rm', '-i', '--platform', config['services']['app']['platform'], '--network', 'none', '--user', '0:0',
+    return ['docker', 'run', '--rm', '-i', '--network', 'none', '--user', '0:0',
             '--mount', spec, '--entrypoint', 'tar', config['services']['app']['image']]
 
 
@@ -126,7 +141,13 @@ def main():
         with (folder / 'database.dump').open('rb') as stream:
             run(COMPOSE + ['exec', '-T', 'db', 'pg_restore', '-U', 'miaoyomi', '-d', 'miaoyomi',
                            '--exit-on-error', '--single-transaction', '--no-owner', '--no-acl'], stdin=stream)
-        print('Restore complete. Start with: docker compose -f compose.yaml up -d --wait')
+        command = 'docker compose -f docker-compose.yml'
+        if os.environ.get('MIAOYOMI_COMPOSE_MODE') == 'dev':
+            command += ' -f docker-compose.dev.yml'
+        command += ' up -d --wait'
+        if os.environ.get('MIAOYOMI_COMPOSE_MODE') == 'dev':
+            command += ' --build'
+        print(f'Restore complete. Start with: {command}')
 
 
 if __name__ == '__main__':
