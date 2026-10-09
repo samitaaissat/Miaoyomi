@@ -7,9 +7,10 @@ import { env } from '../env';
 import { viewCtxFor, sourceAllowedFor } from '../lib/visibility';
 import { createNovelEngine, resolveSourceUrl } from '../lib/novels/engine';
 import { NovelService } from '../lib/novels/service';
-import { discoverNovels, discoveryQuery, discoveryCursor, selectedSourceIds, type DiscoveryQuery } from '../lib/novels/discovery';
+import { discoveryMetadataRequest, initializeDiscoverySources, discoverNovels, discoveryQuery, discoveryCursor, selectedSourceIds, type DiscoveryQuery } from '../lib/novels/discovery';
 import * as catalog from '../lib/novels/catalog';
 import { NovelError, type NovelEngine, type EngineSource } from '../lib/novels/apiTypes';
+import { currentSourceRequest } from '../lib/sourceRequests';
 
 const key=z.string().regex(/^[a-f0-9]{64}$/);
 const idParams=z.object({id:key});
@@ -44,8 +45,10 @@ export default async function novelRoutes(app:FastifyInstance,opts:{engine?:Nove
 
   async function discoverySources(req:FastifyRequest,v:DiscoveryQuery,mode?:string):Promise<EngineSource[]> {
     await mayFetch(req);
+    currentSourceRequest().signal?.throwIfAborted();
     const ctx=await viewCtxFor(userIdOf(req),roleOf(req));
-    const all=await engine.sources(),ids=selectedSourceIds(v);
+    currentSourceRequest().signal?.throwIfAborted();
+    const all=await discoveryMetadataRequest(()=>engine.sources()),ids=selectedSourceIds(v);
     for(const id of ids){
       const source=all.find(s=>s.id===id);
       if(!source)throw new NovelError(404,'unknown_source','Unknown novel source.');
@@ -60,14 +63,9 @@ export default async function novelRoutes(app:FastifyInstance,opts:{engine?:Nove
   app.get('/api/novels/sources',async req=>{
     await mayFetch(req);
     const ctx=await viewCtxFor(userIdOf(req),roleOf(req));
-    const sources=(await engine.sources()).filter(s=>sourceAllowedFor(s,ctx.maxAgeRating));
-    // Enabled state survives engine restarts; runtime filter metadata is initialized lazily.
-    // Resolve sequentially so a large enabled list cannot exceed the private engine's worker limit.
-    for(let i=0;i<sources.length;i++)if(sources[i].enabled&&sources[i].supported&&!sources[i].filters) {
-      try{sources[i]=await engine.source(sources[i].id);}
-      catch(error){req.log.warn({err:error,sourceId:sources[i].id},'Novel source metadata could not initialize');}
-    }
-    return {sources};
+    const sources=(await discoveryMetadataRequest(()=>engine.sources())).filter(s=>sourceAllowedFor(s,ctx.maxAgeRating));
+    const initialized=await initializeDiscoverySources(engine,sources);
+    return {sources:initialized.filter(s=>sourceAllowedFor(s,ctx.maxAgeRating))};
   });
   app.post('/api/novels/sources/:sourceId',{preHandler:requireAdmin},async req=>{
     const id=sourceId.parse((req.params as any).sourceId);
@@ -80,13 +78,17 @@ export default async function novelRoutes(app:FastifyInstance,opts:{engine?:Nove
     let filters:Record<string,unknown>|undefined;
     if(v.filters){try{filters=z.record(z.unknown()).parse(JSON.parse(v.filters));}catch{throw new NovelError(400,'bad_filters','The source filters are invalid.');}}
     if(filters&&Object.keys(filters).length&&selectedSourceIds(v).length!==1)throw new NovelError(400,'bad_filters','Select one source to use its catalog filters.');
-    const sources=await discoverySources(req,v,v.mode);
-    return discoverNovels(engine,sources,{page:v.page,pages,mode:v.mode,filters:filters&&Object.keys(filters).length?filters:undefined});
+    const single=selectedSourceIds(v).length===1,deadline=Date.now()+(single?30_000:10_000);
+    const sources=await discoveryMetadataRequest(()=>discoverySources(req,v,v.mode),Math.max(0,deadline-Date.now()));
+    return discoverNovels(engine,sources,{page:v.page,pages,mode:v.mode,filters:filters&&Object.keys(filters).length?filters:undefined,
+      budgetMs:Math.max(0,deadline-Date.now()),sourceTimeoutMs:single?25_000:5_000});
   });
   app.get('/api/novels/search',async req=>{
     const v=discoveryQuery.extend({q:z.string().trim().min(1).max(500)}).parse(req.query);
-    const pages=discoveryCursor(v.cursor),sources=await discoverySources(req,v);
-    return discoverNovels(engine,sources,{page:v.page,pages,query:v.q});
+    const single=selectedSourceIds(v).length===1,deadline=Date.now()+(single?30_000:10_000);
+    const pages=discoveryCursor(v.cursor),sources=await discoveryMetadataRequest(()=>discoverySources(req,v),Math.max(0,deadline-Date.now()));
+    return discoverNovels(engine,sources,{page:v.page,pages,query:v.q,
+      budgetMs:Math.max(0,deadline-Date.now()),sourceTimeoutMs:single?25_000:5_000});
   });
   app.get('/api/novels/detail',async req=>{
     const v=z.object({sourceId,path:z.string().min(1).max(8000)}).parse(req.query);

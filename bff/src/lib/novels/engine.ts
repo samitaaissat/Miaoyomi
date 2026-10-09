@@ -1,7 +1,7 @@
 import { env } from '../../env';
 import { NovelError, type NovelEngine, type EngineSource } from './apiTypes';
 import { sourceUrl } from './catalog';
-import { sourceRequestSignal } from '../sourceRequests';
+import { currentSourceRequest, sourceRequestSignal } from '../sourceRequests';
 
 /** Plugin paths may be opaque API IDs. Only an absent resolver permits the ordinary URL fallback. */
 export async function resolveSourceUrl(engine: NovelEngine, source: EngineSource, path: string, isNovel: boolean): Promise<string> {
@@ -20,29 +20,38 @@ export async function resolveSourceUrl(engine: NovelEngine, source: EngineSource
 export function createNovelEngine(base = env.NOVEL_ENGINE_URL, token = env.NOVEL_ENGINE_TOKEN): NovelEngine {
   async function request(path: string, body?: unknown): Promise<Response> {
     if (!base || !token) throw new NovelError(503, 'engine_unconfigured', 'The novel source service is not configured.');
+    const signal=sourceRequestSignal(150_000);
     let response: Response;
     try {
       response = await fetch(base.replace(/\/$/, '') + path, {
         method: body === undefined ? 'GET' : 'POST',
         headers: {authorization: `Bearer ${token}`, 'content-type': 'application/json'},
         // Covers the engine's 30s queue wait plus its 110s browser-backed invocation deadline.
-        body: body === undefined ? undefined : JSON.stringify(body), signal: sourceRequestSignal(150_000),
+        body: body === undefined ? undefined : JSON.stringify(body), signal,
       });
     } catch {
+      if(signal.aborted)throw signal.reason;
       throw new NovelError(503, 'engine_unavailable', 'The novel source service is unavailable. Try again shortly.');
     }
     if (!response.ok) {
-      const detail = await response.json().catch(() => ({})) as any;
+      const detail = await readJson(response).catch(error => {
+        if(currentSourceRequest().signal?.aborted)throw error;
+        return {};
+      }) as any;
       const status = response.status === 401 ? 503 : response.status;
       throw new NovelError(status, String(detail.error || 'source_error'), String(detail.message || 'The source request failed.'));
     }
     return response;
   }
+  async function readJson(response:Response):Promise<any> {
+    try{return await response.json();}
+    catch(error){const signal=currentSourceRequest().signal;if(signal?.aborted)throw signal.reason;throw error;}
+  }
   return {
-    async sources() { return ((await (await request('/v1/sources')).json()) as {sources: EngineSource[]}).sources; },
-    async source(id) { return ((await (await request(`/v1/sources/${encodeURIComponent(id)}`)).json()) as {source: EngineSource}).source; },
-    async enable(id, enabled) { return ((await (await request(`/v1/sources/${encodeURIComponent(id)}`, {enabled})).json()) as {source: EngineSource}).source; },
-    async invoke(sourceId, method, args) { return ((await (await request('/v1/invoke', {sourceId, method, args})).json()) as {result: unknown}).result; },
+    async sources() { return ((await readJson(await request('/v1/sources'))) as {sources: EngineSource[]}).sources; },
+    async source(id) { return ((await readJson(await request(`/v1/sources/${encodeURIComponent(id)}`))) as {source: EngineSource}).source; },
+    async enable(id, enabled) { return ((await readJson(await request(`/v1/sources/${encodeURIComponent(id)}`, {enabled}))) as {source: EngineSource}).source; },
+    async invoke(sourceId, method, args) { return ((await readJson(await request('/v1/invoke', {sourceId, method, args}))) as {result: unknown}).result; },
     async asset(sourceId, url) {
       const r = await request('/v1/asset', {sourceId, url});
       const contentType = (r.headers.get('content-type') || '').split(';')[0].trim();

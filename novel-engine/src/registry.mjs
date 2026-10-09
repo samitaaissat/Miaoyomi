@@ -31,16 +31,19 @@ export class Registry {
   }
   entry(id) { const entry = this.entries.get(id); if (!entry) throw new EngineError('UNKNOWN_SOURCE', 'Unknown novel source', 404); return entry; }
   list() { return [...this.entries.values()].map(x => ({ ...x.source })); }
-  async get(id) {
+  async get(id, { signal, deadlineMs } = {}) {
     const entry = this.entry(id);
     if (entry.source.supported && !entry.source.filters) {
       try {
-        const metadata = await executePlugin(entry.script, '__metadata');
+        const metadata = await executePlugin(entry.script, '__metadata', [], { signal, deadlineMs });
         entry.source.filters = metadata.filters;
         // Transport options stay private to the engine and still cross the guarded header policy.
         entry.imageRequestInit = metadata.imageRequestInit;
       }
-      catch (error) { entry.source.supported = false; entry.source.reason = error.message; }
+      catch (error) {
+        if (signal?.aborted || error.code === 'DEADLINE') throw error;
+        entry.source.supported = false; entry.source.reason = error.message;
+      }
     }
     return { ...entry.source };
   }
@@ -50,8 +53,8 @@ export class Registry {
     if (!entry.source.enabled) throw new EngineError('SOURCE_DISABLED', 'Novel source is disabled', 409);
     return entry;
   }
-  async enable(id, enabled) {
-    const source = await this.get(id); const entry = this.entry(id);
+  async enable(id, enabled, options) {
+    const source = await this.get(id, options); const entry = this.entry(id);
     if (enabled && !source.supported) throw new EngineError('UNSUPPORTED_CAPABILITY', source.reason, 409);
     const task = this.writeQueue.then(async () => {
       const next = { ...this.state, [id]: { enabled, digest: entry.digest } };

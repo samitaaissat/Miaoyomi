@@ -4,6 +4,35 @@ import { createApp } from '../src/app.mjs';
 import { executePlugin } from '../src/executor.mjs';
 import { TaskQueue } from '../src/task-queue.mjs';
 
+import { Registry } from '../src/registry.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
+
+test('actual HTTP metadata cancellation releases the worker without poisoning capability',async t=>{
+  const registry=new Registry();
+  registry.entries=new Map(['slow','healthy'].map(id=>[id,{
+    script:id==='slow'?'exports.default={get filters(){while(true){}}};':'exports.default={filters:{}};',
+    source:{id,enabled:true,supported:true},
+  }]));
+  const entered=Promise.withResolvers();
+  const get=registry.get.bind(registry);
+  registry.get=(id,...args)=>{if(id==='slow')entered.resolve();return get(id,...args);};
+  const app=await createApp({token:'test',registry,concurrency:1,queueTimeoutMs:300,deadlineMs:2_000});
+  t.after(()=>app.close());
+  const address=await app.listen({host:'127.0.0.1',port:0});
+  const controller=new AbortController();
+  const pending=fetch(address+'/v1/sources/slow',{signal:controller.signal,headers:{authorization:'Bearer test'}});
+  const rejected=assert.rejects(pending,error=>error.name==='AbortError');
+  await entered.promise;await delay(150);controller.abort();await rejected;
+  const next=await app.inject({url:'/v1/sources/healthy',headers:{authorization:'Bearer test'}});
+  assert.equal(next.statusCode,200,next.body);
+  assert.equal(registry.entry('slow').source.supported,true);
+  assert.equal(registry.entry('slow').source.reason,undefined);
+  registry.entry('slow').script='exports.default={filters:{recovered:true}};';
+  const recovery=await app.inject({url:'/v1/sources/slow',headers:{authorization:'Bearer test'}});
+  assert.equal(recovery.statusCode,200,recovery.body);
+  assert.deepEqual(recovery.json().source.filters,{recovered:true});
+});
+
 const script = `exports.default={async parseNovel(path){
   const response=await require('@libs/fetch').fetchApi('https://fixture.example/'+path);
   const storage=require('@libs/storage').storage;

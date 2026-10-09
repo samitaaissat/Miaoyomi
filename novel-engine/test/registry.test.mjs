@@ -17,6 +17,24 @@ test('the conventional AJAX request header does not imply use of the browser XML
   assert.match(capabilityReason(request + 'new XMLHttpRequest();', {}), /XMLHttpRequest/);
 });
 
+test('metadata deadline failures remain retryable while genuine capability failures remain unsupported',async()=>{
+  const registry=new Registry();
+  registry.entries=new Map([['fixture',{
+    script:'exports.default={get filters(){while(true){}}};',
+    source:{id:'fixture',enabled:true,supported:true},
+  }]]);
+  await assert.rejects(registry.get('fixture',{deadlineMs:100}),error=>error.code==='DEADLINE');
+  assert.equal(registry.entry('fixture').source.supported,true);
+  assert.equal(registry.entry('fixture').source.reason,undefined);
+  registry.entry('fixture').script='exports.default={filters:{recovered:true}};';
+  assert.deepEqual((await registry.get('fixture')).filters,{recovered:true});
+  delete registry.entry('fixture').source.filters;
+  registry.entry('fixture').script='exports.default={get filters(){return require("fs");}};';
+  const unsupported=await registry.get('fixture');
+  assert.equal(unsupported.supported,false);
+  assert.ok(unsupported.reason);
+});
+
 test('pinned timer-dependent sources expose metadata and can be activated', async t => {
   const stateDir = await mkdtemp(join(tmpdir(), 'novel-timers-'));
   t.after(() => rm(stateDir, { recursive: true, force: true }));

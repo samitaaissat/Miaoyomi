@@ -41,10 +41,10 @@ export async function createApp({ token = process.env.NOVEL_ENGINE_TOKEN, regist
   app.setErrorHandler((error, _request, reply) => reply.code(error.status || (error.statusCode === 400 || error.statusCode === 413 ? 400 : 502)).send({ error: error.code || 'ENGINE_ERROR', message: error.message }));
   app.get('/healthz', async () => ({ ok: true }));
   app.get('/v1/sources', async () => ({ sources: registry.list() }));
-  app.get('/v1/sources/:id', async (request, reply) => ({ source: await bounded(request, reply, () => registry.get(request.params.id), request.params.id) }));
+  app.get('/v1/sources/:id', async (request, reply) => ({ source: await bounded(request, reply, signal => registry.get(request.params.id, { signal, deadlineMs }), request.params.id) }));
   app.post('/v1/sources/:id', async (request, reply) => {
     if (!request.body || typeof request.body.enabled !== 'boolean') throw bad('enabled must be a boolean');
-    return { source: await bounded(request, reply, () => registry.enable(request.params.id, request.body.enabled), request.params.id) };
+    return { source: await bounded(request, reply, signal => registry.enable(request.params.id, request.body.enabled, { signal, deadlineMs }), request.params.id) };
   });
   app.post('/v1/invoke', async (request, reply) => {
     validateInvocation(request.body);
@@ -63,7 +63,7 @@ export async function createApp({ token = process.env.NOVEL_ENGINE_TOKEN, regist
   app.post('/v1/asset', async (request, reply) => {
     if (!request.body || typeof request.body.sourceId !== 'string' || typeof request.body.url !== 'string' || request.body.url.length > 4096) throw bad('Expected sourceId and an asset URL');
     const asset = await bounded(request, reply, async signal => {
-      await registry.get(request.body.sourceId);
+      await registry.get(request.body.sourceId, { signal, deadlineMs });
       const entry = registry.active(request.body.sourceId);
       return broker.fetchAsset(entry.source, request.body.url, signal, entry.imageRequestInit);
     });
