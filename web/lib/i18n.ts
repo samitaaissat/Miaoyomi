@@ -27,7 +27,8 @@ export const LOCALES = [
 export type Locale = (typeof LOCALES)[number]['code'];
 export const DEFAULT_LOCALE: Locale = 'en';
 
-const KEY = 'uchiyomi.lang';
+const KEY = 'miaoyomi.lang';
+const LEGACY_KEY = 'uchiyomi.lang';
 
 export const dirOf = (code: string): 'ltr' | 'rtl' =>
   LOCALES.find((l) => l.code === code)?.dir ?? 'ltr';
@@ -53,8 +54,14 @@ export function detectLocale(): Locale {
 
 export function storedLocale(): Locale | null {
   if (typeof localStorage === 'undefined') return null;
-  const v = localStorage.getItem(KEY);
-  return isLocale(v) ? v : null;
+  try {
+    const v = localStorage.getItem(KEY);
+    if (isLocale(v)) return v;
+    const legacy = localStorage.getItem(LEGACY_KEY);
+    if (!isLocale(legacy)) return null;
+    storeLocale(legacy);
+    return legacy;
+  } catch { return null; }
 }
 
 export function storeLocale(code: Locale): void {

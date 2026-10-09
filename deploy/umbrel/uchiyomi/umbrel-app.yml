@@ -1,3 +1,4 @@
+# Retained upstream legacy Uchiyomi deployment; not the downstream Miaoyomi installer.
 manifestVersion: 1
 id: uchiyomi
 category: media

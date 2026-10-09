@@ -1,3 +1,4 @@
+# Retained upstream legacy Uchiyomi deployment; not the downstream Miaoyomi installer.
 # Uchiyomi, single container, with Postgres as its own container.
 #
 #   curl -O https://raw.githubusercontent.com/AngeloSha/uchiyomi/main/deploy/docker-compose.external-db.yml

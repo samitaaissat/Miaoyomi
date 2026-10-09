@@ -1,11 +1,11 @@
 ---
 name: Feature request
-about: Suggest an idea for Uchiyomi
+about: Suggest an idea for Miaoyomi
 labels: enhancement
 ---
 
 **The idea**
-What you would like Uchiyomi to do.
+What you would like Miaoyomi to do.
 
 **Why**
 The problem it solves or the value it adds.

@@ -1,4 +1,4 @@
-// Uchiyomi source-plugin SDK — the ONLY surface a source plugin compiles against.
+// Miaoyomi source-plugin SDK — the ONLY surface a source plugin compiles against.
 //
 // A plugin is a compiled CommonJS module dropped into SOURCES_DIR. It either:
 //   • exports a const/array of objects implementing SourceAdapter (no host services needed), or

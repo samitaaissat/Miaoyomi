@@ -229,7 +229,7 @@ export async function deleteSeriesFiles(id: string): Promise<{ ok: true; files: 
  * scans run on every add, every updater sweep and the admin button -- so the rule is all roots or none.
  *
  * The database is updated directly rather than left to fingerprint rematch. LIBRARY_REMATCH is off by
- * default and is a deliberate-refusal guesser (two chapters minimum, ambiguity refuses); when Uchiyomi
+ * default and is a deliberate-refusal guesser (two chapters minimum, ambiguity refuses); when Miaoyomi
  * performs the rename it knows the mapping exactly, so guessing it back would be strictly worse.
  */
 export async function renameSeriesFolder(id: string, newFolder: string): Promise<{ ok: true } | FileOpRefusal> {

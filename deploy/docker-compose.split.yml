@@ -1,3 +1,4 @@
+# Retained upstream legacy Uchiyomi deployment; not the downstream Miaoyomi installer.
 # Uchiyomi — the SPLIT layout: the API and the web app as two containers.
 #
 # This is not the layout the install instructions use any more. Uchiyomi ships as ONE container

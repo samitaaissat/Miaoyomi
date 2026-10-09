@@ -1,3 +1,5 @@
+> Historical upstream deployment migration guide. These commands target retained upstream Uchiyomi images and volume names, not the current Miaoyomi native installer. See [current deployment](proxmox-lxc.md).
+
 # Moving between layouts
 
 Uchiyomi runs in one of three shapes, all on the same image and the same volumes:

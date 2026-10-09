@@ -1,6 +1,6 @@
 # Full backup and restore
 
-Miaoyomi's full backup includes PostgreSQL, both manga directories, EPUBs, app configuration, enabled novel plugins, Suwayomi state and `.env`. Uchiyomi's built-in nightly backup covers only database/configuration; it is not a complete book-library backup.
+Miaoyomi's full backup includes PostgreSQL, both manga directories, EPUBs, app configuration, enabled novel plugins, Suwayomi state and `.env`. Miaoyomi's built-in nightly backup covers only database/configuration; it is not a complete book-library backup.
 
 Run the following **inside the LXC**, from the checkout. Choose a new directory outside every library path, on your backup storage:
 

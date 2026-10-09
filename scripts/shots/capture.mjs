@@ -1,4 +1,4 @@
-// Screenshot rig. Drives a real browser against a running Uchiyomi and writes every image the README, the
+// Screenshot rig. Drives a real browser against a running Miaoyomi and writes every image the README, the
 // user guide, the CasaOS listing and the marketing site use.
 //
 // Screenshots used to be taken by hand, which is why they rotted: the whole set was captured 25 minutes
@@ -125,7 +125,7 @@ async function main() {
           return req.respond({
             status: 200,
             contentType: 'application/json',
-            body: JSON.stringify({ serverName: 'Uchiyomi', allowRegistration: false, oidc: { enabled: true, name: 'Authentik' } }),
+            body: JSON.stringify({ serverName: 'Miaoyomi', allowRegistration: false, oidc: { enabled: true, name: 'Authentik' } }),
           });
         }
         req.continue();
@@ -275,7 +275,7 @@ async function main() {
     // Icon-only strips for the marketing site's extension wall.
     //
     // Deliberately NOT screenshots of the list: those are perfectly legible walls of third-party site names,
-    // and Uchiyomi's whole stated position is that it ships no site names and hosts nothing. The icons carry
+    // and Miaoyomi's whole stated position is that it ships no site names and hosts nothing. The icons carry
     // the visual just as well, so the wall is built from those alone. Adult extensions stay filtered out
     // (the panel hides them by default), and the icons come from our own proxy, not from anyone's CDN.
     if (want('ext-strip-1')) {

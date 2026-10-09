@@ -3,7 +3,7 @@
 // Registration is opt-in per source. Every selected adapter stays available; outbound work is bounded by
 // the shared request scheduler instead of hiding sources from Providers.
 //
-// Everything here fails soft. Suwayomi being unset, down, or unauthorised must leave Uchiyomi booting and
+// Everything here fails soft. Suwayomi being unset, down, or unauthorised must leave Miaoyomi booting and
 // working exactly as it does without it.
 import { q } from '../../db';
 import { registerAdapter } from '../loader';
@@ -71,7 +71,7 @@ export async function loadSuwayomiSources(list: () => Promise<RemoteSource[]> = 
 /**
  * Keep trying, quietly, after a failed first load.
  *
- * The engine is a JVM and takes longer to accept connections than Uchiyomi does to boot, so on a cold
+ * The engine is a JVM and takes longer to accept connections than Miaoyomi does to boot, so on a cold
  * `docker compose up` the first attempt reliably fails. Without this the extension sources stay missing and
  * the panel says "unreachable" until someone thinks to hit reload -- which is exactly the kind of "turn it on
  * yourself" friction this feature is not supposed to have.

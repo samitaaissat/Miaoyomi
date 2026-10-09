@@ -1,4 +1,4 @@
-# Contributing to Uchiyomi
+# Contributing to Miaoyomi
 
 Thanks for your interest. Bug reports, feature ideas, and pull requests are all welcome.
 

@@ -2,7 +2,7 @@
 # Run as the uid that actually owns your library, then drop privileges -- and, when no database was given,
 # run one.
 #
-# Uchiyomi can rename and delete files in your library now, and a container running as uid 10002 cannot write
+# Miaoyomi can rename and delete files in your library now, and a container running as uid 10002 cannot write
 # a library owned by you. The usual fix people are told is `chown -R 10002 /your/manga`, which takes ownership
 # of a personal media collection that a NAS share, another app and your own login also use. So instead this
 # runs as YOUR uid, the linuxserver.io convention that most self-hosters already expect, and your files stay

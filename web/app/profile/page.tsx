@@ -142,7 +142,7 @@ export default function ProfilePage() {
   const lastRead = stats?.last_read_at ? tr('Last read {when}', { when: relativeTime(stats.last_read_at) }) : '';
   const headline = streak > 0 ? tr('{n} day streak', { n: streak })
     : read > 0 ? tr('Pick up where you left off')
-    : tr('Welcome to Uchiyomi');
+    : tr('Welcome to Miaoyomi');
   const sub = streak > 0 ? (best > streak ? tr('Best {n} days', { n: best }) : lastRead)
     : read > 0 ? lastRead
     : '';
@@ -327,7 +327,7 @@ export default function ProfilePage() {
                       <IcRefresh width={16} height={16} />{tr('Reading history')}
                     </Link>
                     <Link href="/wrapped/" className="btn-ghost px-5 py-2.5 text-sm">
-                      <IcSparkle width={16} height={16} />{tr('Your Uchiyomi Wrapped')}
+                      <IcSparkle width={16} height={16} />{tr('Your Miaoyomi Wrapped')}
                     </Link>
                   </div>
                 </motion.div>
@@ -395,15 +395,6 @@ function RailActions({ isAdmin }: { isAdmin: boolean }) {
           <IcChevronRight width={15} height={15} className={chev} />
         </Link>
       )}
-      {/* Promoted out of the bottom of the Account tab, where it sat behind eight cards and a scroll. It is
-          asking for something rather than offering something, so it stays quiet: the same row as its
-          neighbours, no accent fill, and the cup carries the colour on its own. */}
-      <a href="https://ko-fi.com/angeloshaheen" target="_blank" rel="noopener noreferrer"
-        className={`${row} text-fog-400 hover:bg-ink-800/60 hover:text-fog-100`}>
-        <span aria-hidden className="shrink-0 text-base leading-none">☕</span>
-        <span className="min-w-0 truncate">{tr('Support Uchiyomi')}</span>
-        <IcChevronRight width={15} height={15} className={chev} />
-      </a>
       <button onClick={logout} className={`${row} text-red-300/90 hover:bg-red-500/10 hover:text-red-300`}>
         <IcLogOut width={16} height={16} className="shrink-0" />
         <span className="min-w-0 truncate">{tr('Sign out')}</span>
@@ -876,7 +867,7 @@ function InstallCard({ span = '' }: { span?: string }) {
 
   return (
     <div className={`${CARD} ${span}`}>
-      <h2 className="mb-3 font-display text-base font-semibold">{tr('Install Uchiyomi')}</h2>
+      <h2 className="mb-3 font-display text-base font-semibold">{tr('Install Miaoyomi')}</h2>
       {canInstall ? (
         <button onClick={install} className="btn-accent w-full py-2.5 text-sm">
           <IcDownload width={18} height={18} />{tr('Add to home screen')}
@@ -960,9 +951,9 @@ function OpdsCard({ span = '', link, setLink }: { span?: string; link: OpdsLink 
       defaultOpen={!!link}
       span={span}
     >
-      <p className="text-sm text-fog-100">{tr('Read Uchiyomi in another app')}</p>
+      <p className="text-sm text-fog-100">{tr('Read Miaoyomi in another app')}</p>
       <p className="mt-1 max-w-prose text-xs text-fog-500">
-        {tr('Add Uchiyomi as an OPDS catalog in readers like Panels, Chunky, KOReader or Moon+. Generate a personal link, then enter the URL and credentials below in your reader.')}
+        {tr('Add Miaoyomi as an OPDS catalog in readers like Panels, Chunky, KOReader or Moon+. Generate a personal link, then enter the URL and credentials below in your reader.')}
       </p>
 
       {st?.exists && !link && (
@@ -1044,7 +1035,7 @@ function SignOutCard({ span = '' }: { span?: string }) {
     <div className={`${CARD} ${span}`}>
       <button onClick={logout} className="btn-ghost w-full py-2.5 text-sm text-red-300">{tr('Sign out')}</button>
       <p className="mt-3 flex items-center justify-center gap-1 text-center text-[11px] text-fog-600">
-        <IcSparkle width={12} height={12} />{tr('Uchiyomi · personal reader for your Komga library')}
+        <IcSparkle width={12} height={12} />{tr('Miaoyomi · personal reader for your Komga library')}
       </p>
     </div>
   );

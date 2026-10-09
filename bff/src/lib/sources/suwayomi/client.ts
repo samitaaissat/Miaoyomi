@@ -1,4 +1,4 @@
-// GraphQL client for a Suwayomi server acting as Uchiyomi's extension engine.
+// GraphQL client for a Suwayomi server acting as Miaoyomi's extension engine.
 //
 // Suwayomi is the only project that runs Mihon/Tachiyomi's Kotlin extensions outside Android: it converts the
 // extension APKs to JVM bytecode and supplies a fake Android runtime for them. We use it for exactly one job --

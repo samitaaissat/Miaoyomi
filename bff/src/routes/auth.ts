@@ -165,7 +165,7 @@ export default async function authRoutes(app: FastifyInstance) {
   app.get('/auth/config', async () => {
     const s = await one<{ server_name: string; allow_registration: boolean }>('SELECT server_name, allow_registration FROM server_settings WHERE id = 1');
     return {
-      serverName: s?.server_name || 'Uchiyomi',
+      serverName: s?.server_name || 'Miaoyomi',
       allowRegistration: !!s?.allow_registration,
       oidc: oidcEnabled() ? { enabled: true, name: oidcName() } : { enabled: false, name: '' },
     };

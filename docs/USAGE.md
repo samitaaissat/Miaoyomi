@@ -1,6 +1,7 @@
-# Uchiyomi — User Guide
+# Miaoyomi — User Guide
 
-Everything you can do in Uchiyomi, screen by screen. For install/configuration see the [README](../README.md).
+> Commands using `uchiyomi` container names refer to retained upstream legacy layouts. For current Miaoyomi deployment and backup commands, use [the deployment guide](proxmox-lxc.md) and [backup guide](backup-restore.md).
+Everything you can do in Miaoyomi, screen by screen. For install/configuration see the [README](../README.md).
 
 - [1. First run & setup](#1-first-run--setup)
 - [2. Signing in](#2-signing-in)
@@ -43,14 +44,14 @@ built from source.
 
 ## 2. Signing in
 
-![Login](shots/login.webp)
+
 
 **Signing in with your own identity provider.** If the admin has configured OIDC, a **Continue with …** button
 appears under the password form and you can sign in with Authentik, Authelia, Keycloak or anything else that
 speaks OpenID Connect. Local accounts keep working alongside it, so a provider outage can never lock you out.
 Setup is in [docs/api.md](api.md#single-sign-on-oidc).
 
-![Continue with SSO](shots/login-sso.webp)
+
 
 Log in with the username/password you set in `setup.sh` (the first account is `admin`). If you've turned on
 two-factor auth, you'll be asked for your 6-digit code (or a recovery code) after the password.
@@ -59,7 +60,7 @@ two-factor auth, you'll be asked for your 6-digit code (or a recovery code) afte
 
 ## 3. Your library
 
-![Library](shots/library.webp)
+
 
 The **Library** tab is your whole collection. Tabs across the top sort it: **Curated**, **Newest**, **Most
 read**. Each cover shows a **NEW** ribbon when there are unread chapters. Click a cover to open the series.
@@ -82,7 +83,7 @@ Point `LIBRARY_PATH` at what you already have. A chapter can be any of:
 Two things worth knowing. **EPUB pages come out in spine order**, not filename order, because store-bought
 manga routinely names its image files by an internal id that sorts wrong. And **a text ebook is not a
 chapter**: a reflowable novel has no images in its spine, so it yields no pages and the scanner skips it
-rather than adding something that opens to nothing. Uchiyomi is a manga reader, not an ebook library.
+rather than adding something that opens to nothing. Miaoyomi is a manga reader, not an ebook library.
 
 Any folder depth works, and `ComicInfo.xml` is read when an archive carries one.
 
@@ -90,7 +91,7 @@ Any folder depth works, and `ComicInfo.xml` is read when an archive carries one.
 
 ## 4. A series & its chapters
 
-![Series](shots/series.webp)
+
 
 The series page shows the cover, an ambient backdrop, genres, description, and the **chapter grid**.
 
@@ -131,7 +132,7 @@ read it this week.
 
 ## 5. The reader
 
-![Reader](shots/reader.webp)
+
 
 Tap the middle of the page to raise the top bar, then tap the **series name** on it to jump to that series.
 The back arrow beside it does something different on purpose: it returns you to wherever you opened the
@@ -153,7 +154,7 @@ It remembers your scroll position, so closing and reopening drops you right back
 
 ## 6. Discover & add new series
 
-![Discover](shots/discover.webp)
+
 
 **Discover** is how you add new series to your library.
 
@@ -161,24 +162,24 @@ It remembers your scroll position, so closing and reopening drops you right back
 - **Latest on …** rails: every source gets its own row of that site's newest releases, so you can browse
   what just came out without searching. The **✦ Newest** button (next to *Browse newest from*) opens a full
   grid of one source's latest.
-- **Search:** type a title once and Uchiyomi searches **all your sources at the same time**. Results are
+- **Search:** type a title once and Miaoyomi searches **all your sources at the same time**. Results are
   de-duplicated into one card per title (a small badge shows how many sources carry it), and anything you
   already own is marked **✓ In library**.
 - **Add:** tap a card and pick which source to add it from (skipped when only one has it). Choose **how many
   chapters** to download (All or first N), toggle **auto-update**, and add it. It downloads chapter 1
   immediately so the series shows up right away, then grabs the rest in the background (with a progress bar).
 
-If you try to add a title you already have from another source, Uchiyomi warns you and lets you add a separate copy
+If you try to add a title you already have from another source, Miaoyomi warns you and lets you add a separate copy
 or cancel. A heads-up appears if you queue a lot of chapters at once (sources can rate-limit heavy downloads).
 
 ---
 
 ## 7. Sources: MangaDex + Add-a-site
 
-![Add a site](shots/admin-providers.webp)
+
 
 **MangaDex works out of the box** (the official public API), with nothing to set up. Everything else you add
-yourself in **Admin → Providers** by pasting a site's URL. Uchiyomi bundles generic **engines** for three common
+yourself in **Admin → Providers** by pasting a site's URL. Miaoyomi bundles generic **engines** for three common
 manga-site families (**Madara**, **MangaThemesia**, and **Manganato**), and most manga sites run one of them.
 
 ### Add a site — step by step
@@ -188,12 +189,12 @@ manga-site families (**Madara**, **MangaThemesia**, and **Manganato**), and most
 3. Paste the site's **homepage URL**, the root only, e.g. `https://some-manga-site.com`. Not a deep link to a
    specific series or chapter.
 4. Type a **Name** (any label you like; it's just what shows in your source list).
-5. Click **Add**. Uchiyomi fetches the homepage, figures out the engine, and the source goes live **instantly, no
+5. Click **Add**. Miaoyomi fetches the homepage, figures out the engine, and the source goes live **instantly, no
    restart**. It then appears in the list and is searchable from **Discover**.
 
 ### Will a site work?
 
-Uchiyomi can read a site if it runs one of the three bundled engines. You don't need to know which (Auto-detect
+Miaoyomi can read a site if it runs one of the three bundled engines. You don't need to know which (Auto-detect
 handles it), but here's how to recognize them by their URLs/layout:
 
 | Engine | Tell-tale signs |
@@ -223,7 +224,7 @@ Each source shows a **health** badge: `ok`, `rate-limited`, `blocked`, or `off`.
 ### When a site won't work
 
 If Auto-detect can't identify it *and* no manually-picked engine returns search results, the site runs an engine
-Uchiyomi doesn't support out of the box, typically an **API-only** site or a **JavaScript-rendered (SPA)** one.
+Miaoyomi doesn't support out of the box, typically an **API-only** site or a **JavaScript-rendered (SPA)** one.
 Those need a code-level adapter (a source plugin); the three bundled engines cover the large majority of manga
 sites, but not every one.
 
@@ -234,7 +235,7 @@ sites, but not every one.
 
 ### Extensions (Mihon / Tachiyomi)
 
-Beyond the built-in engines, Uchiyomi can use the **Mihon / Tachiyomi extension ecosystem** — around 1,400 of
+Beyond the built-in engines, Miaoyomi can use the **Mihon / Tachiyomi extension ecosystem** — around 1,400 of
 them. Go to **Admin → Providers → Extensions**, add an extension repository you trust (once), then search and
 click **Add**. Installing switches that extension's sources on straight away, so it is searchable from Discover
 immediately.
@@ -242,7 +243,7 @@ immediately.
 Adult extensions are hidden until you tap **18+**. Full detail, including how it works and how to turn it off,
 is in [docs/extensions.md](extensions.md).
 
-![The extension browser](shots/admin-extensions.webp)
+
 
 ## 8. The admin panel
 
@@ -252,7 +253,7 @@ Sessions, Activity), **Content** (Library, Health, Art) and **Sources** (Provide
 
 **Server → Overview:** library stats + recent member activity.
 
-![Members](shots/admin-members.webp)
+
 
 ### Health
 
@@ -261,7 +262,7 @@ chapters, chapters that downloaded as one or two images, the same title sitting 
 numbers that can't be real, and any source that is failing or blocked. Each check says what it found and what
 it cannot see. Hit **Re-check** to run them again.
 
-![Library health](shots/admin-health.webp)
+
 
 **Content → Library** also lists every series you have deleted, with **Restore** to put one back exactly as
 it was. Deleting happens on the series page itself (section 4); this is where hidden series go and how you
@@ -269,7 +270,7 @@ get them back.
 
 ### Renaming folders and deleting files
 
-By default Uchiyomi never writes to your library: every edit you make -- titles, covers, chapter numbers --
+By default Miaoyomi never writes to your library: every edit you make -- titles, covers, chapter numbers --
 is stored in its own database, and your files are left exactly as they are. Turning that off is deliberate
 and takes one step, because it means handing the app write access to your collection:
 
@@ -284,7 +285,7 @@ Set those to the user that owns your library and restart. The startup log says w
 **Rename folder** is on the series page, under the admin actions next to *Edit details*. It moves the folder
 on disk and rewrites the chapter paths, and it keeps chapter ids and everyone's reading progress, so nothing
 is marked unread and nothing is re-downloaded. It refuses outright unless *every* folder the series occupies
-is writable: a series often spans your library and Uchiyomi's own downloads folder, and renaming only one of
+is writable: a series often spans your library and Miaoyomi's own downloads folder, and renaming only one of
 them would leave the old name in place for the next scan to pick up as a second, half-read copy.
 
 **Delete files** is on **Content → Library**, and only for a series you have already removed. The reversible
@@ -306,7 +307,7 @@ library root or typing the path, and the count of what it would hold appears bef
 
 Libraries are *declared*, not guessed. The obvious alternative -- treating every top-level folder as a
 library -- would be wrong on most existing installs, because that level usually holds the source names the
-downloader wrote. Uchiyomi still suggests folders it can see, at any depth, with the ones that look like
+downloader wrote. Miaoyomi still suggests folders it can see, at any depth, with the ones that look like
 source names sorted last and flagged `source?`.
 
 **Libraries may sit inside one another.** With `Manga` and `Manga/Seinen` both declared, a series under
@@ -341,7 +342,7 @@ Nothing changes until you declare something. A fresh install and an upgraded one
 library covering the whole root, no reading progress moves, no files are touched, and removing a library
 returns its series to whichever library still covers their folder.
 
-![Libraries](shots/admin-libraries.webp)
+
 
 Once you have more than one, the Library page grows a row of tabs to switch between them.
 
@@ -377,11 +378,11 @@ for moving a library over from another app:
 - **Mihon / Tachiyomi backup** — pick your `.tachibk` (or `.proto.gz`) file. Only the titles are read; the
   file never leaves your server, and nothing about your Mihon sources or accounts is used.
 - **MangaDex list** — paste the link to a **public** custom list. Private follows would need a MangaDex
-  login, which Uchiyomi never asks for; make a list public and share that instead.
+  login, which Miaoyomi never asks for; make a list public and share that instead.
 - **Paste titles** — one per line, from anywhere.
 
 Whichever you use, the titles land in the box for you to review first. Anything already in your library is
-removed from the list automatically, so you can delete lines you don't want before starting. Uchiyomi then
+removed from the list automatically, so you can delete lines you don't want before starting. Miaoyomi then
 searches your configured sources for each title and adds the best match, showing live progress and a
 per-title result (added / already had / not found / failed).
 
@@ -396,16 +397,16 @@ off in Settings; see [extensions.md](extensions.md).
 
 **Sessions:** every active session across all users, with one-click revoke.
 
-![Settings](shots/admin-settings.webp)
+
 
 **Settings:** server name, an **open-registration** toggle (let anyone sign up), and the **auto-update
-interval** (how often Uchiyomi checks your library for new chapters).
+interval** (how often Miaoyomi checks your library for new chapters).
 
 ---
 
 ## 9. Security: 2FA, sessions, password
 
-![Security](shots/profile-security.webp)
+
 
 In **Profile → Security** (every user has this):
 
@@ -416,7 +417,7 @@ In **Profile → Security** (every user has this):
 - **Active sessions:** see every device you're signed in on (with IP + last-active), revoke any one, or
   **Log out others** in a single click.
 
-Uchiyomi also locks an account after repeated failed logins and records everything in the admin audit feed.
+Miaoyomi also locks an account after repeated failed logins and records everything in the admin audit feed.
 
 ---
 
@@ -429,7 +430,7 @@ A normal sign-in expires every 15 minutes, which is fine for a browser and usele
 Scopes only ever restrict: a read-only token gets a 403 on anything that changes data, and an admin-scoped
 token on a non-admin account still can't reach the admin API. See [docs/api.md](api.md) for the endpoints.
 
-![API tokens](shots/crop-tokens.webp)
+
 
 ## 10. Tracking: AniList sync
 
@@ -438,14 +439,14 @@ your AniList list on its own.
 
 Paste an access token from AniList's developer settings. Progress is the highest chapter you have **finished**,
 so re-reading an old chapter never rewinds your list, and AniList being slow or down can never delay or block
-your reading. If your token expires or is rejected, Uchiyomi disables the connection and says so rather than
+your reading. If your token expires or is rejected, Miaoyomi disables the connection and says so rather than
 failing silently. Disconnect at any time.
 
-![AniList sync](shots/crop-anilist.webp)
+
 
 ## 11. Install as an app & offline
 
-Uchiyomi is a **PWA**. In your browser's menu choose **Install app** (or "Add to Home Screen" on mobile) to get a
+Miaoyomi is a **PWA**. In your browser's menu choose **Install app** (or "Add to Home Screen" on mobile) to get a
 standalone, full-screen app icon.
 
 **Offline:** favorite a series (or use **Download all** / a chapter's ⬇), and those chapters are stored on the
@@ -456,7 +457,7 @@ with smart-offline on, your favorites' next unread chapters auto-download while 
 
 ## 12. Backups & restore
 
-Uchiyomi backs itself up. Every night (03:00 by default) it writes a compressed dump of the database plus an
+Miaoyomi backs itself up. Every night (03:00 by default) it writes a compressed dump of the database plus an
 archive of your config to `/backups`, keeping the most recent 14 runs. You can also run it on demand from
 **Admin → Tasks → Backup database & config → Run now**, which shows the last run time and size.
 
@@ -510,7 +511,7 @@ docker exec -i uchiyomi sh -c 'tar -xzf - -C /config' < config.tar.gz
 Restart the app afterwards (`docker compose restart uchiyomi`). If you restore the database *without* the
 config archive, any admin-uploaded cover art will be missing even though the database still references it.
 
-> Container names above are the shipped install: one app container named `uchiyomi`, plus `uchiyomi-db`.
+> Container names above belong to the retained upstream legacy install: one app container named `uchiyomi`, plus `uchiyomi-db`.
 > On the deprecated split layout the app container is `uchiyomi-bff`; if you cloned the repo and run the
 > development stack, they are `yomi-bff` and `yomi-db`. Substitute accordingly.
 > (The development stack also runs Postgres 15 rather than 16; the dumps are plain SQL, so they restore either
@@ -531,14 +532,14 @@ scan; you can also force a rescan from the admin panel, or restart the stack.
 screen lets you create the admin. If an admin already exists, reset the password under **Profile → Security**.
 
 **A source/site won't add.** Paste the site's **base URL** (e.g. `https://example.com`), not a series page.
-Uchiyomi auto-detects the engine (Madara, MangaThemesia, Manganato); Cloudflare-protected sites are handled
+Miaoyomi auto-detects the engine (Madara, MangaThemesia, Manganato); Cloudflare-protected sites are handled
 automatically by the bundled FlareSolverr. A ⛔/⚠ badge on a source means it's temporarily blocked or
 rate-limited — wait a bit, or try another source.
 
 **Behind a reverse proxy, login/cookies don't stick.** Set `PUBLIC_ORIGIN` to the exact public URL you use (e.g.
 `https://manga.example.com`) so cookies and CORS match, and serve it over HTTPS.
 
-**"Install app" / Add to Home Screen isn't offered.** PWAs need a secure context: serve Uchiyomi over HTTPS (or
+**"Install app" / Add to Home Screen isn't offered.** PWAs need a secure context: serve Miaoyomi over HTTPS (or
 `http://localhost`). On iOS, use Safari → Share → Add to Home Screen.
 
 **I lost my 2FA device.** Enter one of the recovery codes (shown when you enabled 2FA) on the login screen instead

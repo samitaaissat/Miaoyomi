@@ -18,7 +18,7 @@ import { t as tr } from '@/lib/i18n';
 import { FindMissingDialog } from '@/components/FindMissingDialog';
 
 // The four the scanner itself writes from ComicInfo's PublishingStatus. Kept as a suggestion list rather
-// than a hard enum, because a file can carry anything and rejecting it would reject Uchiyomi's own data.
+// than a hard enum, because a file can carry anything and rejecting it would reject Miaoyomi's own data.
 const STATUSES = ['ONGOING', 'COMPLETED', 'HIATUS', 'CANCELLED'];
 const fld = 'w-full rounded-lg border border-ink-700 bg-ink-900/60 px-3 py-2 text-sm text-fog-100 outline-none transition focus:border-accent/60';
 

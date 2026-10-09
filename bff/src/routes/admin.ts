@@ -361,7 +361,7 @@ export default async function adminRoutes(app: FastifyInstance) {
   app.put('/api/admin/series/:id/meta', async (req, reply) => {
     const { id } = req.params as { id: string };
     // Status is free text with a generous cap rather than an enum: the scanner writes whatever ComicInfo's
-    // PublishingStatus said, so validating against a fixed list here would reject values Uchiyomi itself
+    // PublishingStatus said, so validating against a fixed list here would reject values Miaoyomi itself
     // produced. The UI offers the four common ones plus an escape hatch.
     const b = z.object({
       title: z.string().max(300).nullish(),
@@ -998,9 +998,9 @@ export default async function adminRoutes(app: FastifyInstance) {
   app.get('/api/admin/art/backfill/status', async () => ({ job: artJob }));
 
   // ---- extensions (Mihon/Tachiyomi sources, via an optional Suwayomi server) ----
-  // Uchiyomi is the remote control, the engine does the work: the catalogue below asks Suwayomi to fetch its
+  // Miaoyomi is the remote control, the engine does the work: the catalogue below asks Suwayomi to fetch its
   // repositories and to install, update or remove an extension, and the routes after it choose WHICH of an
-  // extension's sources become Uchiyomi sources. Nothing here downloads an APK into this process. (This
+  // extension's sources become Miaoyomi sources. Nothing here downloads an APK into this process. (This
   // comment used to claim the opposite -- that installing was a link out to Suwayomi's UI -- which stopped
   // being true the day the catalogue block below was written.)
   app.get('/api/admin/extensions/status', async () => {
@@ -1090,7 +1090,7 @@ export default async function adminRoutes(app: FastifyInstance) {
   });
 
   // ---- the extension catalogue ----
-  // Uchiyomi is a remote control for the operator's own extension server here: the catalogue comes from
+  // Miaoyomi is a remote control for the operator's own extension server here: the catalogue comes from
   // repositories THEY configured, and that server does the fetching and installing. No repository URL ships
   // in this codebase and nothing is fetched until one is added.
   const needExt = (reply: FastifyReply) =>

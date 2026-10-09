@@ -6,7 +6,7 @@ import { env } from '../env';
 const enabled = !!(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY);
 if (enabled) {
   try {
-    webpush.setVapidDetails(env.VAPID_SUBJECT || 'mailto:admin@uchiyomi.com', env.VAPID_PUBLIC_KEY, env.VAPID_PRIVATE_KEY);
+    webpush.setVapidDetails(env.VAPID_SUBJECT || 'mailto:admin@example.com', env.VAPID_PUBLIC_KEY, env.VAPID_PRIVATE_KEY);
   } catch { /* bad keys → leave disabled at send time */ }
 }
 

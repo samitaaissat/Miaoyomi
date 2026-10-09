@@ -17,7 +17,7 @@ place.
 
 ## What it does
 
-It drives a real browser (`ghcr.io/puppeteer/puppeteer`) against a **running** Uchiyomi over the Docker
+It drives a real browser (`ghcr.io/puppeteer/puppeteer`) against a **running** Miaoyomi over the Docker
 network. Because the shots should show a real library rather than an empty demo, it runs against your own
 instance.
 

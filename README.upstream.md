@@ -1,3 +1,5 @@
+> Historical upstream documentation for Uchiyomi, preserved for provenance. Images show the upstream application, not current Miaoyomi. Deployment and support links here belong to upstream.
+
 # Uchiyomi
 
 *A self-hosted manga and manhwa reader that also keeps up with new chapters: one installable PWA, true-black OLED, webtoon-first.*

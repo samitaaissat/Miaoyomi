@@ -1,6 +1,6 @@
-// Loose shapes for the Komga DTOs we consume (only the fields Uchiyomi uses).
+// Loose shapes for the Komga DTOs we consume (only the fields Miaoyomi uses).
 
-export interface UchiyomiFlags {
+export interface MiaoyomiFlags {
   favorite: boolean;
   rating: number | null;
   unread?: number;
@@ -38,7 +38,7 @@ export interface Series {
   metadata: SeriesMetadata;
   booksMetadata?: { summary?: string; genres?: string[]; tags?: string[] };
   color?: string | null;
-  yomi?: UchiyomiFlags;
+  yomi?: MiaoyomiFlags;
   artVersion?: number; // bumps when an admin edits the cover/banner → cache-busts the image URLs
   overrides?: {
     title: string | null; summary: string | null; cover: string | null; banner: string | null;

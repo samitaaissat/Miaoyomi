@@ -433,7 +433,7 @@ export async function runExtensionCheck(
   if (result.reposRestored.length) {
     await deps.notifyAdmins(
       'Extension repositories restored',
-      `The extension server had lost ${result.reposRestored.length} repository setting(s); Uchiyomi put them back.`,
+      `The extension server had lost ${result.reposRestored.length} repository setting(s); Miaoyomi put them back.`,
       '/admin/', 'extensions',
     ).catch(() => {});
   }

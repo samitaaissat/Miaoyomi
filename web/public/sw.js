@@ -1,8 +1,8 @@
-/* Uchiyomi service worker — app-shell + runtime caching.
+/* Miaoyomi service worker — app-shell + runtime caching.
    Explicit offline chapter downloads live in IndexedDB (managed by the app);
    this SW handles the shell, static assets, and casual image/API re-reads. */
 // Bump on any change to cached assets. /icons is served cache-first, so the rebrand's new icons only reach
-// existing visitors once this changes — the activate handler evicts every cache whose name doesn't end in it.
+// existing visitors once this changes. Activation retires only this worker's versioned runtime caches.
 //
 // v7: the API cache was previously kept per-URL with no cap and was never cleared on sign-out, so on a shared
 // device it may already hold one account's home screen, history and stats. Those existing caches have to go on
@@ -12,7 +12,8 @@
 // the bump is load-bearing here rather than cosmetic.
 // v9 stores each navigation under its actual URL so a downloaded novel reader can cold-reload offline.
 // Novel API responses stay out of Cache Storage entirely; their account-scoped offline copy lives in IDB.
-const VERSION = 'v10';
+// v11 refreshes the Miaoyomi manifest and icons cached under unchanged URLs.
+const VERSION = 'v11';
 const SHELL = `yomi-shell-${VERSION}`;
 const STATIC = `yomi-static-${VERSION}`;
 const IMG = `yomi-img-${VERSION}`;
@@ -84,7 +85,7 @@ self.addEventListener('activate', (e) => {
   e.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      await Promise.all(keys.filter((k) => !k.endsWith(VERSION)).map((k) => caches.delete(k)));
+      await Promise.all(keys.filter((k) => /^yomi-(shell|static|img|api)-v\d+$/.test(k) && ![SHELL, STATIC, IMG, API].includes(k)).map((k) => caches.delete(k)));
       await self.clients.claim();
     })(),
   );
@@ -205,7 +206,7 @@ self.addEventListener('fetch', (e) => {
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch (_) {}
-  const title = data.title || 'Uchiyomi';
+  const title = data.title || 'Miaoyomi';
   event.waitUntil(
     self.registration.showNotification(title, {
       body: data.body || 'A new chapter is available',

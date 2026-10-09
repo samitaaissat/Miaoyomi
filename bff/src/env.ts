@@ -59,7 +59,7 @@ const schema = z.object({
   // Users in this IdP group become admins here (leave empty to keep roles managed locally).
   OIDC_ADMIN_GROUP: z.string().default(''),
   // Optional Suwayomi server used purely as an extension engine: it runs Mihon/Tachiyomi's Kotlin extensions
-  // on the JVM and exposes them over GraphQL. Empty issuer = feature off, exactly like OIDC. Uchiyomi keeps
+  // on the JVM and exposes them over GraphQL. Empty issuer = feature off, exactly like OIDC. Miaoyomi keeps
   // owning the library, reader, downloads and updates; Suwayomi only answers search/chapters/pages.
   SUWAYOMI_URL: z.string().default(''),
   NOVEL_ENGINE_URL: z.string().default(''),
@@ -100,7 +100,7 @@ const schema = z.object({
   LIBRARY_REMATCH: z.enum(['off', 'report', 'apply']).default('off'),
   VAPID_PUBLIC_KEY: z.string().default(''),
   VAPID_PRIVATE_KEY: z.string().default(''),
-  VAPID_SUBJECT: z.string().default('mailto:admin@uchiyomi.com'),
+  VAPID_SUBJECT: z.string().default('mailto:admin@example.com'),
   CACHE_MAX_BYTES: z.coerce.number().default(16 * 1024 * 1024 * 1024),
   BACKUP_DIR: z.string().default('/backups'),
   BACKUP_KEEP: z.coerce.number().int().min(1).max(365).default(14), // nightly dumps to retain

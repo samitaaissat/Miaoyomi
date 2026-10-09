@@ -1,5 +1,6 @@
-# Uchiyomi API
+# Miaoyomi API
 
+> Commands using `uchiyomi` container names refer to retained upstream legacy layouts. For current Miaoyomi deployment and backup commands, use [the deployment guide](proxmox-lxc.md) and [backup guide](backup-restore.md).
 Everything the web app does, it does over this API, so anything you can do in the browser you can script.
 
 This page covers how to authenticate and the endpoints worth scripting. It is not an exhaustive dump of
@@ -461,7 +462,7 @@ GET    /opds/book/:id/page/:n
 
 # Single sign-on (OIDC)
 
-Uchiyomi can sign people in through an identity provider you already run: Authentik, Authelia, Keycloak,
+Miaoyomi can sign people in through an identity provider you already run: Authentik, Authelia, Keycloak,
 Pocket ID, Zitadel, or any other OpenID Connect provider.
 
 SSO is **additional**, never a replacement. Local accounts, 2FA, lockout and session revocation all keep
@@ -522,7 +523,7 @@ an ordinary user. Leave it unset to keep managing roles in the admin panel.
   issuer, audience, expiry and nonce.
 - SSO sessions appear in **Profile → Security** as a device named "SSO" and can be revoked like any other.
 - Signing in through SSO does not ask for a second factor here; your identity provider is responsible for
-  that. Local password logins still use Uchiyomi's own 2FA.
+  that. Local password logins still use Miaoyomi's own 2FA.
 
 ## Miaoyomi manga and novel additions
 

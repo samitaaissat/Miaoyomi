@@ -1,11 +1,11 @@
-# Uchiyomi API -- OpenAPI 3.1.
+# Miaoyomi API -- OpenAPI 3.1.
 #
 # Served at /api/docs (Swagger UI) and /api/docs/json. Kept honest by bff/test/openapiCoverage.test.ts, which
 # compares every registered route against this file in both directions, and docs/api.md against both.
 # Generated once from the route table and then hand-maintained: add the operation here when you add the route.
 openapi: 3.1.0
 info:
-  title: Uchiyomi API
+  title: Miaoyomi API
   version: 0.19.0
   description: "Everything the web app does, it does over this API. Session JWTs are for the browser; scripts
     use a personal API token (Profile -> Security -> API tokens), sent as `Authorization: Bearer uy_...`.

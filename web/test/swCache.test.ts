@@ -15,7 +15,7 @@
 // sw.js is plain browser JS with no module surface, so it is evaluated here against a fake worker global.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import vm from 'node:vm';
 
@@ -178,4 +178,44 @@ test('Save Offline receives acknowledgement only after the reader shell is cache
   assert.equal((replies[0] as { ok?: boolean })?.ok, true);
   const shell = [...store.keys()].find((key) => key.startsWith('yomi-shell-'))!;
   assert.ok(store.get(shell)!.has(reader));
+});
+
+
+test('upgrading from v10 fetches fresh branding assets and retires old runtime caches', async () => {
+  const { handlers, store, ctx } = loadSw();
+  const paths = ['/manifest.webmanifest', ...readdirSync(join(__dirname, '..', 'public', 'icons')).filter((name) => name.endsWith('.png')).map((name) => `/icons/${name}`)];
+  const assets = paths.map((path) => `https://yomi.test${path}`);
+  store.set('yomi-static-v10', new Map(assets.map((url) => [url, new Response('old Uchiyomi asset')])));
+  for (const kind of ['shell', 'img', 'api']) store.set(`yomi-${kind}-v10`, new Map());
+  const fetched: string[] = [];
+  ctx.fetch = async (req: { url: string }) => {
+    fetched.push(req.url);
+    return new Response(readFileSync(join(__dirname, '..', 'public', new URL(req.url).pathname)));
+  };
+  const waits: Promise<any>[] = [];
+  handlers.activate({ waitUntil: (promise: Promise<any>) => waits.push(promise) });
+  await Promise.all(waits);
+  for (const url of assets) {
+    const response = await doFetch(handlers, url);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), readFileSync(join(__dirname, '..', 'public', new URL(url).pathname)), `fresh branding required for ${url}`);
+  }
+  assert.deepEqual(fetched, assets, 'each replaced asset must reach the network once');
+  for (const kind of ['static', 'shell', 'img', 'api']) assert.ok(!store.has(`yomi-${kind}-v10`), `old ${kind} cache removed`);
+  const current = [...store.keys()].find((key) => key.startsWith('yomi-static-'))!;
+  assert.equal(store.get(current)!.size, assets.length);
+  ctx.fetch = async () => { throw new Error('offline'); };
+  for (const url of assets) assert.equal((await doFetch(handlers, url)).status, 200, 'new assets remain cached offline');
+});
+
+
+test('branding activation preserves unrelated caches and private offline databases', async () => {
+  const { handlers, store, ctx } = loadSw();
+  const preserved = ['another-app-v3', 'yomi-reader-downloads', 'yomi-static-v11', 'yomi-shell-v11', 'yomi-img-v11', 'yomi-api-v11'];
+  for (const name of preserved) store.set(name, new Map([['saved', new Response('keep me')]]));
+  // Activation has no reason to open, upgrade or delete either private offline database.
+  ctx.indexedDB = new Proxy({}, { get() { throw new Error('activation touched private offline IndexedDB'); } });
+  const waits: Promise<any>[] = [];
+  handlers.activate({ waitUntil: (promise: Promise<any>) => waits.push(promise) });
+  await Promise.all(waits);
+  for (const name of preserved) assert.equal(await store.get(name)?.get('saved')?.text(), 'keep me', `preserve ${name}`);
 });

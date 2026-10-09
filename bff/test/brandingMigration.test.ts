@@ -1,0 +1,20 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+test('factory server name migration preserves custom names and is repeatable', () => {
+ const ddl = readFileSync('src/lib/migrate.ts','utf8');
+ assert.match(ddl, /ALTER TABLE server_settings ALTER COLUMN server_name SET DEFAULT 'Miaoyomi'/);
+ const update = ddl.match(/UPDATE server_settings SET server_name = 'Miaoyomi' WHERE server_name = 'Uchiyomi';/);
+ assert.ok(update, 'only the exact old factory name may be migrated');
+ const db = new DatabaseSync(':memory:');
+ db.exec('CREATE TABLE server_settings (server_name TEXT)');
+ const names = ['Uchiyomi','My Library','uchiyomi','Uchiyomi family','Miaoyomi'];
+ for (const name of names) db.prepare('INSERT INTO server_settings VALUES (?)').run(name);
+ db.exec(update[0]);
+ const expected = names.map(name => ({server_name: name === 'Uchiyomi' ? 'Miaoyomi' : name}));
+ assert.deepEqual(db.prepare('SELECT server_name FROM server_settings').all().map(row => ({...row})),expected);
+ db.exec(update[0]);
+ assert.deepEqual(db.prepare('SELECT server_name FROM server_settings').all().map(row => ({...row})),expected);
+ db.close();
+});

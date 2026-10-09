@@ -136,7 +136,7 @@ Keep PostgreSQL on storage that supports reliable file locking and fsync. Keep g
 
 ## Reverse proxy and first use
 
-Forward the entire HTTPS origin to `http://GUEST_PRIVATE_IP:8080` (or your selected port), including `/api/`, `/sw.js`, `/manifest.webmanifest` and static assets. Preserve the public `Host`; set trusted `X-Forwarded-Proto: https` and client forwarding headers. Fastify inherits Uchiyomi's `trustProxy: true`, so restrict the app port to your trusted proxy/LAN using your existing firewall.
+Forward the entire HTTPS origin to `http://GUEST_PRIVATE_IP:8080` (or your selected port), including `/api/`, `/sw.js`, `/manifest.webmanifest` and static assets. Preserve the public `Host`; set trusted `X-Forwarded-Proto: https` and client forwarding headers. Fastify inherits Miaoyomi's `trustProxy: true`, so restrict the app port to your trusted proxy/LAN using your existing firewall.
 
 Allow about **180 seconds** for on-demand source requests. Forward cookies and authorization headers. Do not cache authenticated API responses or strip their private/no-store headers. Serve the PWA at `/` on its own origin. Phone service workers require HTTPS; localhost development is the exception.
 
@@ -215,7 +215,7 @@ When upgrading from a version whose installed manager only configured the manga 
 
 ## Source engines and optional FlareSolverr
 
-Manga uses Uchiyomi's built-in/generic sources and Suwayomi's Mihon-compatible extensions. Configure extension repositories/sources through the existing admin controls.
+Manga uses Miaoyomi's built-in/generic sources and Suwayomi's Mihon-compatible extensions. Configure extension repositories/sources through the existing admin controls.
 
 Choose **yes** at the FlareSolverr prompt to run the official community installer for its **separate Debian LXC**. Miaoyomi does not install FlareSolverr or a browser in Alpine. The official installer installs Chrome, the FlareSolverr Linux release and a native systemd service. The wrapper discovers the resulting container and address, checks the solver from the app guest, and configures the app and novel engine's `FLARESOLVERR_URL` plus Suwayomi to use `http://SOLVER_PRIVATE_IP:8191`. Existing native guests or external endpoints can be selected instead. [Official FlareSolverr installer](https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/install/flaresolverr-install.sh).
 

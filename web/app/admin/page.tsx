@@ -660,7 +660,7 @@ function Providers() {
       {/* Import a list of titles */}
       <div className="card grad-border wide p-4">
         <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-fog-500">{tr('Import a list')}</p>
-        <p className="mb-2 text-[11px] text-fog-500">Bring your library over from another app. Uchiyomi searches your sources for each title and adds the best match.</p>
+        <p className="mb-2 text-[11px] text-fog-500">Bring your library over from another app. Miaoyomi searches your sources for each title and adds the best match.</p>
 
         {/* file / MangaDex intake — parsed into a reviewable list before anything is added */}
         <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -673,7 +673,7 @@ function Providers() {
           <input value={mdUrl} onChange={(e) => setMdUrl(e.target.value)} placeholder={tr('public MangaDex list link')} autoCapitalize="none" className="field min-w-0 flex-1" />
           <button onClick={() => parseMangadex()} disabled={parsing || !mdUrl.trim()} className="chip text-xs disabled:opacity-50">{tr('Load')}</button>
         </div>
-        <p className="mb-2 text-[10px] text-fog-600">A .tachibk backup stays on your server — only the titles are read. MangaDex lists must be public; private follows need a MangaDex login, which Uchiyomi doesn&apos;t ask for.</p>
+        <p className="mb-2 text-[10px] text-fog-600">A .tachibk backup stays on your server — only the titles are read. MangaDex lists must be public; private follows need a MangaDex login, which Miaoyomi doesn&apos;t ask for.</p>
 
         <textarea value={imp} onChange={(e) => setImp(e.target.value)} rows={4} placeholder={'…or paste titles, one per line'} className="field resize-y" />
         {parsed && (
@@ -710,7 +710,7 @@ function Providers() {
       {list.length === 0 ? (
         <div className="card grad-border full p-6 text-center">
           <p className="text-sm font-semibold text-fog-100">{tr('No sources installed')}</p>
-          <p className="mx-auto mt-1 max-w-md text-xs text-fog-500">Mount a compiled source pack at the server&apos;s <code className="rounded bg-ink-800 px-1 py-0.5">SOURCES_DIR</code>, then hit Reload. With none installed, Uchiyomi reads only the library you already own.</p>
+          <p className="mx-auto mt-1 max-w-md text-xs text-fog-500">Mount a compiled source pack at the server&apos;s <code className="rounded bg-ink-800 px-1 py-0.5">SOURCES_DIR</code>, then hit Reload. With none installed, Miaoyomi reads only the library you already own.</p>
         </div>
       ) : (
         <>
@@ -1752,7 +1752,7 @@ interface Catalog { content: CatalogExt[]; total: number; matched: number; shown
  * Browse and install Mihon / Tachiyomi extensions.
  *
  * Installing one switches its sources on in the same action — having to find them again in a second list is
- * exactly the friction this replaced. Uchiyomi never hosts extensions: the catalogue comes from repositories
+ * exactly the friction this replaced. Miaoyomi never hosts extensions: the catalogue comes from repositories
  * the operator adds here, and the extension server does the fetching.
  */
 function Extensions({ span = '' }: { span?: string }) {
@@ -1786,7 +1786,7 @@ function Extensions({ span = '' }: { span?: string }) {
       <div className={`card grad-border p-4 ${span}`}>
         <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-fog-500">{tr('Extensions')}</p>
         <p className="text-[11px] leading-relaxed text-fog-500">
-          The extension engine isn&apos;t running. It normally starts with the rest of Uchiyomi — if you turned it
+          The extension engine isn&apos;t running. It normally starts with the rest of Miaoyomi — if you turned it
           off, bring it back with <code className="text-fog-300">docker compose up -d yomi-suwayomi</code>.
         </p>
       </div>
@@ -1889,7 +1889,7 @@ function Extensions({ span = '' }: { span?: string }) {
 
       {!status.reachable ? (
         <p className="text-[11px] text-fog-500">
-          Can&apos;t reach the extension engine{status.error ? ` (${status.error})` : ''}. Uchiyomi keeps working; extensions
+          Can&apos;t reach the extension engine{status.error ? ` (${status.error})` : ''}. Miaoyomi keeps working; extensions
           are just unavailable until it&apos;s back.
         </p>
       ) : (
@@ -1926,7 +1926,7 @@ function Extensions({ span = '' }: { span?: string }) {
                   </button>
                 </div>
                 <p className="text-[10px] leading-relaxed text-fog-600">
-                  Uchiyomi doesn&apos;t host extensions, so you point it at a repository you trust — the same URL you&apos;d
+                  Miaoyomi doesn&apos;t host extensions, so you point it at a repository you trust — the same URL you&apos;d
                   use in Mihon. Both <code>index.pb</code> and <code>index.json</code> are supported. The extension
                   engine checks the repository before adding it and reports errors loading the index here.
                 </p>

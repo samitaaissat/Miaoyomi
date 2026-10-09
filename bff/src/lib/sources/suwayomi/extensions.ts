@@ -1,6 +1,6 @@
 // Browsing and installing Mihon/Tachiyomi extensions on the connected Suwayomi server.
 //
-// Uchiyomi is a remote control here, not a store: the catalogue comes from repositories the OPERATOR has
+// Miaoyomi is a remote control here, not a store: the catalogue comes from repositories the OPERATOR has
 // configured on their own server, and Suwayomi does the fetching and installing. No repository URL ships in
 // this codebase, and nothing is fetched until someone adds one.
 //

@@ -1,4 +1,4 @@
-// Turn each Suwayomi source (i.e. each installed Mihon/Tachiyomi extension's source) into an Uchiyomi
+// Turn each Suwayomi source (i.e. each installed Mihon/Tachiyomi extension's source) into an Miaoyomi
 // SourceAdapter. Operation names and argument shapes below were taken from live introspection of
 // Suwayomi-Server v2.2.2100, not from documentation -- the docs are wrong about the endpoint path already.
 //
@@ -127,7 +127,7 @@ function toChapter(c: RemoteChapter, reportedNumbers: Set<number>, fallbackNumbe
 }
 
 /**
- * Build the Uchiyomi adapter for one Suwayomi source.
+ * Build the Miaoyomi adapter for one Suwayomi source.
  *
  * `requiresCloudflare` is deliberately false: Suwayomi solves Cloudflare itself with an embedded browser, so
  * these sources skip our FlareSolverr entirely. Images do need Suwayomi's auth header, which is declared via

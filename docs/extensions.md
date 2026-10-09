@@ -1,6 +1,7 @@
 # Extensions (Mihon / Tachiyomi sources)
 
-Uchiyomi ships **generic engines** that reach whole families of manga sites by URL. On top of that it can use
+> Commands using `uchiyomi` container names refer to retained upstream legacy layouts. For current Miaoyomi deployment and backup commands, use [the deployment guide](proxmox-lxc.md) and [backup guide](backup-restore.md).
+Miaoyomi ships **generic engines** that reach whole families of manga sites by URL. On top of that it can use
 the **Mihon / Tachiyomi extension ecosystem** — the same extensions those apps use, roughly 1,400 of them.
 
 You browse and install them from **Admin → Providers → Extensions**. There is nothing to set up first.
@@ -8,7 +9,7 @@ You browse and install them from **Admin → Providers → Extensions**. There i
 ## Using it
 
 1. Open **Admin → Providers**. The Extensions panel says `ready`.
-2. **Add a repository** (once). Uchiyomi doesn't host extensions, so you point it at a repository you trust —
+2. **Add a repository** (once). Miaoyomi doesn't host extensions, so you point it at a repository you trust —
    the same URL you would paste into Mihon. Open **Manage** in the Extensions panel and add it.
 3. **Search and click Add.** The extension installs, its sources switch on straight away, and it is
    searchable from Discover immediately. No second step, no restart.
@@ -23,7 +24,7 @@ version shows **Update**.
 
 ## Automatic updates
 
-Uchiyomi checks your repositories **every 6 hours** and installs new versions of the extensions you have
+Miaoyomi checks your repositories **every 6 hours** and installs new versions of the extensions you have
 installed. You do not have to press anything.
 
 The check is a task like any other: **Admin → Server → Tasks** shows when it last ran, what it did, and a
@@ -38,7 +39,7 @@ What it does on its own:
   against whatever was last fetched by hand and reliably finds nothing to do.
 - **Waits for the chapter updater.** Replacing an extension while a library sweep is using it breaks that
   sweep's downloads, so updates wait for the next check instead. The panel says when it did.
-- **Puts your repository list back.** The list is stored by Uchiyomi as well as by the engine, so deleting the
+- **Puts your repository list back.** The list is stored by Miaoyomi as well as by the engine, so deleting the
   engine's volume no longer silently un-configures the feature. If the volume is wiped, the check restores
   the repositories and reinstalls the extensions you had.
 - **Tells you when an extension is abandoned.** An installed extension that no repository offers any more
@@ -58,15 +59,15 @@ repositories actually move (roughly every fifteen hours); there is nothing to ga
 
 ## Why there is a second container
 
-Those extensions are Kotlin, compiled to Android bytecode and shipped as APKs. They cannot run in Uchiyomi's
+Those extensions are Kotlin, compiled to Android bytecode and shipped as APKs. They cannot run in Miaoyomi's
 Node server, and there is no converter — "porting" them would mean rewriting hundreds by hand.
 
 [Suwayomi](https://github.com/Suwayomi/Suwayomi-Server) is the one project that solved this. It converts an
 extension's Android bytecode to JVM bytecode and supplies a fake Android runtime so the extension believes it
 is on a phone, right down to a headless browser for the ones that need to get past Cloudflare.
 
-So Uchiyomi runs Suwayomi as an **extension engine** and nothing else. It starts with the rest of the stack,
-Uchiyomi configures itself to talk to it, and you never open it. Uchiyomi keeps owning your library, reader,
+So Miaoyomi runs Suwayomi as an **extension engine** and nothing else. It starts with the rest of the stack,
+Miaoyomi configures itself to talk to it, and you never open it. Miaoyomi keeps owning your library, reader,
 downloads, updates, users and UI; the engine only answers "search this", "list these chapters", "give me this
 chapter's pages".
 
@@ -74,10 +75,10 @@ The cost is honest: it is a JVM and sits around 800 MB of RAM once running.
 
 ## How it behaves
 
-- **Uchiyomi does the downloading.** Chapters land in your own library as CBZ files exactly like every other
+- **Miaoyomi does the downloading.** Chapters land in your own library as CBZ files exactly like every other
   source, so there is one library, one updater and one set of files.
-- **Cloudflare is the engine's problem, not ours.** These sources skip Uchiyomi's FlareSolverr entirely.
-- **If the engine is down, Uchiyomi is fine.** It boots normally, the built-in engines keep working, the panel
+- **Cloudflare is the engine's problem, not ours.** These sources skip Miaoyomi's FlareSolverr entirely.
+- **If the engine is down, Miaoyomi is fine.** It boots normally, the built-in engines keep working, the panel
   says it is unreachable, and extension-backed series simply do not update until it is back.
 - **Series stay routed** by the source they came from, so the scheduled updater keeps pulling new chapters.
 
@@ -130,13 +131,13 @@ The queues are in memory: a restart cancels them. They do not persist HTTP reque
 failed operations. Downloads retain their existing retry behavior for HTTP 429 responses. Their chapter
 gate also bounds waiting work (32 per source, 256 overall), with a five-minute waiting budget.
 
-**Adult sources.** Extensions declare whether they are adult, and Uchiyomi records that per source. A member
+**Adult sources.** Extensions declare whether they are adult, and Miaoyomi records that per source. A member
 whose age limit is set below 18 cannot reach one: it is left out of their source list entirely, and the
 server refuses it by id rather than relying on the app to hide it. Admins and members with no age limit are
 unaffected. Sources with no such declaration — the built-in engines, source packs, custom sites — are treated
 as not adult, the same way an unrated series stays visible instead of vanishing the moment a limit is set.
 
-You can point `SUWAYOMI_URL` at a Suwayomi you already run instead of the bundled one; Uchiyomi doesn't care
+You can point `SUWAYOMI_URL` at a Suwayomi you already run instead of the bundled one; Miaoyomi doesn't care
 whose it is.
 
 The image is pinned rather than tracking `:stable`, because `:stable` is older than the extension API today's
@@ -144,8 +145,8 @@ repository indexes require and would show an empty catalogue.
 
 ## Where the line is
 
-Uchiyomi's code contains **no scraper, no site name, and no repository URL**. The catalogue you browse comes
-from repositories *you* add, and the engine does the fetching and installing. Uchiyomi never hosts or
+Miaoyomi's code contains **no scraper, no site name, and no repository URL**. The catalogue you browse comes
+from repositories *you* add, and the engine does the fetching and installing. Miaoyomi never hosts or
 redistributes an extension, and ships no default repository — so nothing is fetched from anywhere until you
 choose a source for it.
 

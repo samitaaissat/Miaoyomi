@@ -313,11 +313,13 @@ CREATE INDEX IF NOT EXISTS idx_chapter_failures_source ON chapter_failures(sourc
 -- server-wide settings (single row, id=1)
 CREATE TABLE IF NOT EXISTS server_settings (
   id                 int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-  server_name        text    NOT NULL DEFAULT 'Uchiyomi',
+  server_name        text    NOT NULL DEFAULT 'Miaoyomi',
   allow_registration boolean NOT NULL DEFAULT false,
   updater_hours      int     NOT NULL DEFAULT 6,
   updated_at         timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE server_settings ALTER COLUMN server_name SET DEFAULT 'Miaoyomi';
+UPDATE server_settings SET server_name = 'Miaoyomi' WHERE server_name = 'Uchiyomi';
 INSERT INTO server_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 -- nightly backup task: hour of day to run (local time) and the last run's outcome, persisted so the admin
 -- Tasks view still reports it after a restart (the in-memory runtime state resets).
@@ -340,7 +342,7 @@ ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS extension_last_result jsonb
 ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS extension_repos       jsonb   NOT NULL DEFAULT '[]';
 
 -- What the repositories offered and what was installed, as of the last check. This is what makes "new
--- upstream", "dropped upstream" and "installed outside Uchiyomi" answerable at all, and what lets a wiped
+-- upstream", "dropped upstream" and "installed outside Miaoyomi" answerable at all, and what lets a wiped
 -- extension server get its extensions back rather than just its repository list.
 -- Rows are never deleted: last_seen older than a run is how "no repository offers this any more" is spelled.
 CREATE TABLE IF NOT EXISTS extension_catalog (

@@ -31,15 +31,15 @@ export const metadata: Metadata = {
   title: 'Miaoyomi — manga and novels, your way',
   description: 'A private, source-powered reader for manga and prose.',
   manifest: '/manifest.webmanifest',
-  appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'Uchiyomi' },
+  appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'Miaoyomi' },
   icons: { icon: '/icons/favicon.png', apple: '/icons/apple-touch-icon.png' },
   openGraph: {
-    title: 'Uchiyomi',
+    title: 'Miaoyomi',
     description: 'A private, source-powered reader for manga and prose.',
     images: ['/art/og.jpg'],
     type: 'website',
   },
-  twitter: { card: 'summary_large_image', title: 'Uchiyomi', images: ['/art/og.jpg'] },
+  twitter: { card: 'summary_large_image', title: 'Miaoyomi', images: ['/art/og.jpg'] },
 };
 
 export const viewport: Viewport = {

@@ -27,8 +27,18 @@ await p.type('input[type=password]', process.env.E2E_PASS || 'e2e-passw0rd-123')
 await p.keyboard.press('Enter');
 await new Promise((r) => setTimeout(r, 4500));
 
+// Reproduce a returning visitor with only the legacy language preference.
+await p.evaluate(() => {
+  localStorage.removeItem('miaoyomi.lang');
+  localStorage.setItem('uchiyomi.lang', 'fr');
+});
+await p.goto(`${BASE}/library`, { waitUntil: 'networkidle2', timeout: 60000 });
+await p.waitForFunction(() => document.documentElement.lang === 'fr' && localStorage.getItem('miaoyomi.lang') === 'fr', { timeout: 30000 });
+const legacy = await p.evaluate(() => localStorage.getItem('uchiyomi.lang'));
+if (legacy !== 'fr') fails.push('migration removed or changed the legacy language preference');
+
 for (const code of LOCALES) {
-  await p.evaluate((c) => localStorage.setItem('uchiyomi.lang', c), code);
+  await p.evaluate((c) => localStorage.setItem('miaoyomi.lang', c), code);
   await p.goto(`${BASE}/library`, { waitUntil: 'networkidle2', timeout: 60000 });
   await new Promise((r) => setTimeout(r, 2200));
 
