@@ -28,7 +28,7 @@ const shims = {
       valid = catalog.find('.title-list h2').text().trim()
         && catalog.children('.row').toArray().every(row => {
           const link = $(row).find('h3 a').first();
-          return link.attr('href') && link.attr('title')?.trim() && link.text().trim();
+          return link.attr('href') && link.attr('title')?.trim();
         });
     } else if (kind === 'chapter options') {
       const select = $('select#chapter-nav');
@@ -41,7 +41,8 @@ const shims = {
       const content = $('[id="chr-content"], [id="chapter-content"], [class="txt"]').first();
       // These are the same hidden elements skipped by the pinned chapter parser.
       content.find('sub, iframe, div[class*="ads"], div[class*="unlock-buttons"]').remove();
-      valid = content.text().trim();
+      valid = content.text().trim() || content.find('img').toArray().some(image =>
+        image.attribs.src?.trim());
     }
     if (errorPage || !closed.has(kind) || !valid) {
       throw Object.assign(new Error('AllNovel: invalid ' + kind + ' HTML response'), { code: 'SOURCE_RESPONSE' });

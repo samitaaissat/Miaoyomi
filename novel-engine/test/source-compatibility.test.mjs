@@ -325,6 +325,24 @@ for (const [label, body] of [
   });
 }
 
+for (const recovery of [false, true]) {
+  test('AllNovel accepts image-only catalog links via ' + (recovery ? 'solver' : 'direct HTTP'), async t => {
+    const body = '<div id="list-page"><div class="archive"><div class="list-truyen"><div class="title-list"><h2>Popular</h2></div><div class="row"><h3><a href="/fixture.html" title="Valid Story"><img src="/cover.webp"></a></h3></div></div></div></div>';
+    const entry = recovery ? undefined : await pinnedEntry(t, 'allnovel');
+    const run = recovery ? await allNovelSolver(t, () => body)
+      : (method, args) => runPlugin(entry.script, method, args, { fetch: async url => ({ url, status: 200, headers: { 'content-type': 'text/html' }, body }) });
+    assert.deepEqual(await run('popularNovels', [1, {}]),
+      [{ name: 'Valid Story', path: 'fixture.html', cover: 'https://novelfull.com/cover.webp' }]);
+  });
+}
+
+test('AllNovel still requires href and title on image-only catalog links', async t => {
+  for (const attributes of ['title="Valid Story"', 'href="/fixture.html"', 'href="/fixture.html" title="   "']) {
+    const run = await allNovelSolver(t, () => '<div id="list-page"><div class="archive"><div class="list-truyen"><div class="title-list"><h2>Popular</h2></div><div class="row"><h3><a ' + attributes + '><img src="/cover.webp"></a></h3></div></div></div></div>');
+    await assert.rejects(run('popularNovels', [1, {}]), error => error.code === 'SOURCE_RESPONSE' && /catalog/i.test(error.message));
+  }
+});
+
 test('AllNovel retains genuine empty search and valid end-of-pagination catalogs', async t => {
   // From the public no-result capture: list-page/archive/list-truyen/title-list,
   // no novel rows, and the real no-results message.
@@ -372,6 +390,30 @@ for (const [kind, method, path, bodies] of [
     });
   }
 }
+
+for (const recovery of [false, true]) {
+  test('AllNovel preserves image-only chapters via ' + (recovery ? 'solver' : 'direct HTTP'), async t => {
+    const body = '<div id="chapter-content"><p><img src="/chapter-page-1.webp" alt="Chapter page 1"></p><div class="ads"><img src="/ad.webp"></div><sub><img src="/hidden.webp"></sub></div>';
+    const entry = recovery ? undefined : await pinnedEntry(t, 'allnovel');
+    const run = recovery ? await allNovelSolver(t, () => body)
+      : (method, args) => runPlugin(entry.script, method, args, { fetch: async url => ({ url, status: 200, headers: { 'content-type': 'text/html' }, body }) });
+    assert.equal(await run('parseChapter', ['fixture/chapter-1.html']),
+      '<div id="chapter-content"><p><img src="/chapter-page-1.webp" alt="Chapter page 1"></p></div>');
+  });
+}
+
+test('AllNovel rejects image markup without readable chapter content', async t => {
+  for (const body of [
+    '<div id="chapter-content"><img></div>',
+    '<div id="chapter-content"><img src="   "></div>',
+    '<div id="chapter-content"><div class="ads"><img src="/ad.webp"></div><div class="unlock-buttons"><img src="/unlock.webp"></div><iframe><img src="/frame.webp"></iframe><sub><img src="/hidden.webp"></sub></div>',
+    '<div id="chapter-content"><p><img src="/chapter-page-1.webp"></p>',
+    '<title>404 Not Found</title><div id="chapter-content"><img src="/chapter-page-1.webp"></div>',
+  ]) {
+    const run = await allNovelSolver(t, () => body);
+    await assert.rejects(run('parseChapter', ['fixture/chapter-1.html']), error => error.code === 'SOURCE_RESPONSE' && /chapter/i.test(error.message));
+  }
+});
 
 test('AllNovel preserves pinned chapter prose parsing after validation', async t => {
   const run = await allNovelSolver(t, () => '<div id="chapter-content"><p>Hello reader.</p><div class="ads">Advertisement</div><p>Second paragraph.</p></div>');
