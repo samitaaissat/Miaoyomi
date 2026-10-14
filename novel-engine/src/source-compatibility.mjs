@@ -5,11 +5,11 @@ const shims = {
   const fetches = require('@libs/fetch');
   const originalFetch = fetches.fetchApi;
   // Only the pinned adapter's document routes may use rendered HTML recovery.
-  // Its chapter-list AJAX endpoints must still receive their original responses.
+  // Only chapter-option GET returns HTML; JSON and form POST keep their responses.
   fetches.fetchApi = (url, init = {}) => {
     const target = new URL(url, plugin.site);
     const headers = new Headers(init.headers);
-    const document = /^(?:\/(?:most-popular|hot-novel|completed-novel|latest-release-novel|search)\/?|\/genre\/[^/]+\/?|\/[^?#]+\.html)$/.test(target.pathname);
+    const document = target.pathname === '/ajax-chapter-option' || /^(?:\/(?:most-popular|hot-novel|completed-novel|latest-release-novel|search)\/?|\/genre\/[^/]+\/?|\/[^?#]+\.html)$/.test(target.pathname);
     if (target.origin === new URL(plugin.site).origin && document
         && String(init.method || 'GET').toUpperCase() === 'GET'
         && !target.searchParams.has('ajax') && !headers.has('x-requested-with')

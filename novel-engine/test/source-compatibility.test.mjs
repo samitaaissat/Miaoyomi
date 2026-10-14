@@ -233,3 +233,57 @@ test('AllNovel marks listing search detail and chapter HTML while retaining AJAX
   const json = requests.find(r => r.url.includes('ajax=chapters'));
   assert.equal(json.init.headers.accept, undefined);
 });
+
+// Synthetic detail and option markup: exercises the non-paginated HTML GET branch.
+test('AllNovel recovers HTML chapter options through the guarded solver fallback', async t => {
+  const { NetworkBroker } = await import('../src/network.mjs');
+  const entry = await pinnedEntry(t, 'allnovel');
+  const broker = new NetworkBroker({
+    lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    solverUrl: 'http://solver:8191',
+    transport: async () => ({ status: 403, headers: { 'cf-mitigated': 'challenge' }, body: Buffer.from('<title>Just a moment...</title>') }),
+    solverFetch: async (_url, init) => {
+      const request = JSON.parse(init.body);
+      if (request.cmd === 'sessions.destroy') return Response.json({ status: 'ok' });
+      const detail = request.url === 'https://novelfull.com/fixture.html';
+      if (!detail) assert.equal(request.url, 'https://novelfull.com/ajax-chapter-option?novelId=237');
+      return Response.json({ status: 'ok', solution: {
+        url: request.url, status: 200, headers: {}, cookies: [], userAgent: 'FixtureBrowser',
+        response: detail
+          ? '<div class="books"><img src="/cover.webp" title="Synthetic Story"></div><div id="rating" data-novel-id="237"></div>'
+          : '<select id="chapter-nav" class="btn btn-success form-control chapter_jump"><option value="/fixture/chapter-1.html">Chapter 1 - Arrival</option><option value="/fixture/chapter-2.html">Chapter 2 - Departure</option></select>',
+      } });
+    },
+  });
+  t.after(() => broker.close());
+  const novel = await runPlugin(entry.script, 'parseNovel', ['fixture.html'], { fetch: (url, init) => broker.fetch(entry.source, url, init) });
+  assert.equal(novel.name, 'Synthetic Story');
+  assert.deepEqual(novel.chapters, [
+    { path: 'fixture/chapter-1.html', name: 'Chapter 1 - Arrival', releaseTime: null },
+    { path: 'fixture/chapter-2.html', name: 'Chapter 2 - Departure', releaseTime: null },
+  ]);
+});
+
+test('AllNovel chapter-option HTML marker stays confined to the exact same-origin GET contract', async t => {
+  const entry = await pinnedEntry(t, 'allnovel');
+  const script = entry.script + '\nmodule.exports.default.probeRequest = (url, init) => require("@libs/fetch").fetchApi(url, init).then(r => r.text());';
+  const cases = [
+    ['https://novelfull.com/ajax-chapter-option?novelId=237', {}, 'text/html'],
+    ['https://novelfull.com/ajax-chapter-option/', {}, undefined],
+    ['https://novelfull.com/ajax/chapter-list?novelId=237', {}, undefined],
+    ['https://novelfull.com/ajax-chapter-option?ajax=chapters', {}, undefined],
+    ['https://example.org/ajax-chapter-option?novelId=237', {}, undefined],
+    ['https://novelfull.com/ajax-chapter-option', { headers: { Accept: 'application/json' } }, 'application/json'],
+    ['https://novelfull.com/ajax-chapter-option', { headers: { 'X-Requested-With': 'XMLHttpRequest' } }, undefined],
+    ['https://novelfull.com/ajax-chapter-option', { method: 'POST', body: 'novelId=237', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }, undefined],
+  ];
+  for (const [url, init, accept] of cases) {
+    await runPlugin(script, 'probeRequest', [url, init], { fetch: async (actualUrl, actualInit) => {
+      assert.equal(actualUrl, url);
+      assert.equal(actualInit.headers.accept, accept, url);
+      if (init.body) assert.equal(actualInit.body, 'novelId=237');
+      if (init.method) assert.equal(actualInit.method, 'POST');
+      return { url, status: 200, headers: {}, body: 'synthetic response' };
+    } });
+  }
+});
