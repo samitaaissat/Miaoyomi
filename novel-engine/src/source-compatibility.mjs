@@ -1,4 +1,26 @@
 const shims = {
+  allnovel: String.raw`
+;(() => {
+  const plugin = module.exports.default || exports.default;
+  const fetches = require('@libs/fetch');
+  const originalFetch = fetches.fetchApi;
+  // Only the pinned adapter's document routes may use rendered HTML recovery.
+  // Its chapter-list AJAX endpoints must still receive their original responses.
+  fetches.fetchApi = (url, init = {}) => {
+    const target = new URL(url, plugin.site);
+    const headers = new Headers(init.headers);
+    const document = /^(?:\/(?:most-popular|hot-novel|completed-novel|latest-release-novel|search)\/?|\/genre\/[^/]+\/?|\/[^?#]+\.html)$/.test(target.pathname);
+    if (target.origin === new URL(plugin.site).origin && document
+        && String(init.method || 'GET').toUpperCase() === 'GET'
+        && !target.searchParams.has('ajax') && !headers.has('x-requested-with')
+        && !headers.has('accept')) {
+      headers.set('accept', 'text/html');
+      return originalFetch(url, { ...init, headers });
+    }
+    return originalFetch(url, init);
+  };
+})();`,
+
   arcane: String.raw`
 ;(() => {
   const plugin = module.exports.default || exports.default;

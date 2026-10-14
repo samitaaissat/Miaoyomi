@@ -43,7 +43,8 @@ Usage: miaoyomi COMMAND [OPTIONS]
 
 Local-source installations need --source-dir for every app update. Git installations
 use their saved HTTPS repository/ref unless a replacement source directory is given.
-Application updates do not upgrade Alpine, PostgreSQL, Suwayomi or system packages.
+Application updates do not upgrade Alpine, PostgreSQL or Suwayomi. They ensure the
+official Alpine gcompat runtime dependency is installed before restarting services.
 USAGE
 }
 
@@ -414,6 +415,9 @@ update_native() {
   PHASE=before-cutover
   stop_writers
   perform_backup
+  # Existing guests also need the glibc loader used by Suwayomi's JNI libraries.
+  ensure_alpine_repositories
+  apk add --no-cache gcompat
   PHASE=cutover
   select_release "$NEW_RELEASE" "$APP_DIR/current"
   set_environment_key "$ETC_DIR/novel.env" FLARESOLVERR_URL "$FLARESOLVERR_URL"
@@ -446,6 +450,8 @@ update_suwayomi() {
   PHASE=before-cutover
   stop_writers
   perform_backup
+  ensure_alpine_repositories
+  apk add --no-cache gcompat
   PHASE=cutover
   select_release "$jar" "$APP_DIR/suwayomi/current.jar"
   start_writers
@@ -473,7 +479,7 @@ ensure_alpine_repositories() {
 install_packages() {
   ensure_alpine_repositories
   say 'Installing native Alpine packages; PostgreSQL major is pinned to 18.'
-  apk add --no-cache bash ca-certificates coreutils curl git gzip openssl su-exec tar nodejs npm postgresql18 postgresql18-client postgresql18-openrc openjdk25-jre-headless
+  apk add --no-cache bash ca-certificates coreutils curl git gzip openssl su-exec tar nodejs npm postgresql18 postgresql18-client postgresql18-openrc openjdk25-jre-headless gcompat
   [[ $(node -p 'process.versions.node.split(".")[0]') == 24 ]] || die 'Alpine repositories did not supply Node 24; check the configured 3.24 repositories.'
   [[ $(pg_dump --version) == *' 18.'* ]] || die 'pg_dump must match PostgreSQL major 18.'
 }

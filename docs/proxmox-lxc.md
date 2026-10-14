@@ -108,6 +108,8 @@ For a different Miaoyomi fork, pass `--repo HTTPS_URL --ref REF`. For a reposito
 
 Git-source installation installs Git on the Proxmox node if it is missing. Alpine package setup enables the matching `community` repository when needed for npm and Java.
 
+Fresh native installations include the official Alpine `gcompat` package for Suwayomi JNI libraries that need the glibc loader. With this native manager, both `miaoyomi update` and `miaoyomi update-suwayomi` ensure `gcompat` is installed after the complete backup and before switching releases and restarting services. These commands require access to the configured Alpine 3.24 package repositories; they do not upgrade Alpine, PostgreSQL or unrelated packages. Source failures still need individual verification after restart.
+
 ## Services, storage and existing collections
 
 The application exposes its selected LAN port, normally **8080**. PostgreSQL and both source engines bind to loopback inside the guest. The app and novel engine run as distinct unprivileged users. The novel worker cannot read the application's database secrets or book directories. Native services share the guest OS; their isolation differs from the separate containers in Compose.

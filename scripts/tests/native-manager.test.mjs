@@ -15,6 +15,7 @@ function fixture(t) {
   for (const d of ['bin', 'etc', 'state/config', 'state/novel-engine', 'state/suwayomi', 'state/downloaded-manga', 'state/novels', 'state/manga', 'app/releases/old', 'app/suwayomi', 'backups', 'services', 'init', 'logs', 'pg-conf']) mkdirSync(join(root, d), { recursive: true });
   const put = (p, data, mode = 0o600) => { mkdirSync(dirname(join(root, p)), { recursive: true }); writeFileSync(join(root, p), data, { mode }); };
   put('etc/installed', 'native-v1\n');
+  put('repositories', 'https://dl-cdn.alpinelinux.org/alpine/v3.24/main\n');
   put('etc/install.conf', `PUBLIC_ORIGIN=https://read.example.com\nWEB_PORT=8080\nSOURCE_REPO=\nSOURCE_REF=\nMANGA_LIBRARY_PATH=${sh(join(root, 'state/manga'))}\n`);
   put('etc/app.env', 'JWT_SECRET=keep-this-secret\nPUBLIC_ORIGIN=https://custom.example.com\n');
   put('etc/novel.env', 'NOVEL_ENGINE_TOKEN=keep-this-token\n');
@@ -412,6 +413,53 @@ test('native packages enable the matching Alpine community repository and reject
   assert.notEqual(mixed.status, 0);
   assert.doesNotMatch(f.events(), /apk:/);
   assert.match(mixed.stderr, /3\.24|repositories/i);
+});
+
+test('fresh installation installs official Alpine gcompat before creating service users', t => {
+  const f = fixture(t);
+  rmSync(join(f.root, 'etc/installed'));
+  f.put('repositories', 'https://dl-cdn.alpinelinux.org/alpine/v3.24/main\n');
+  const result = f.run(['install', '--source-dir', f.source, '--config', join(f.root, 'etc/install.conf')], {}, `
+node() { printf '24\\n'; }
+pg_dump() { printf 'pg_dump (PostgreSQL) 18.0\\n'; }
+create_users_and_paths() { die 'test boundary: packages installed'; }
+`);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout + result.stderr, /test boundary: packages installed/);
+  assert.match(f.events(), /^apk:add --no-cache .*\bgcompat\b/m);
+});
+
+test('application upgrade installs gcompat after its complete backup and before restarting Suwayomi', t => {
+  const f = fixture(t);
+  const result = f.run(['update', '--source-dir', f.source], {}, `
+apk() {
+  [[ -n "$LAST_BACKUP" && ! -e "$LAST_BACKUP/.incomplete" && -s "$LAST_BACKUP/SHA256SUMS" ]] || return 19
+  command apk "$@"
+}
+`);
+  assert.equal(result.status, 0, result.stderr);
+  const events = f.events();
+  assert.match(events, /^apk:add --no-cache gcompat$/m);
+  assert.ok(events.indexOf('pg_dump') < events.indexOf('apk:add'));
+  assert.ok(events.indexOf('apk:add') < events.indexOf('service:miaoyomi-suwayomi:start'));
+  assert.equal(readFileSync(join(f.root, 'state/novel-engine/sources.json'), 'utf8'), '{"royalroad":{"enabled":true}}\n');
+});
+
+test('standalone Suwayomi upgrade installs gcompat before selecting the verified jar', t => {
+  const f = fixture(t);
+  // The remote download is the boundary; keep backup, package setup and cutover real.
+  const result = f.run(['update-suwayomi', '--version', 'v2.3.2243', '--sha256', 'a'.repeat(64)], {}, `
+download_suwayomi() { printf 'verified fixture jar' > "$3"; }
+apk() {
+  [[ -n "$LAST_BACKUP" && ! -e "$LAST_BACKUP/.incomplete" ]] || return 19
+  [[ $(readlink "$APP_DIR/suwayomi/current.jar") == "$APP_DIR/suwayomi/old.jar" ]] || return 20
+  command apk "$@"
+}
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(f.events(), /^apk:add --no-cache gcompat$/m);
+  assert.ok(f.events().indexOf('apk:add') < f.events().indexOf('service:miaoyomi-suwayomi:start'));
+  assert.notEqual(readlinkSync(join(f.root, 'app/suwayomi/current.jar')), join(f.root, 'app/suwayomi/old.jar'));
 });
 
 test('installation records diagnostics in a private log without replacing previous details', t => {

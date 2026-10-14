@@ -185,3 +185,51 @@ test('Webnovel marks its HTML fetches for the solver rendered-page fallback', as
     path: '/book/fixture',
   }]);
 });
+
+test('AllNovel recovers its HTML catalog through the guarded solver fallback', async t => {
+  const { NetworkBroker } = await import('../src/network.mjs');
+  const entry = await pinnedEntry(t, 'allnovel');
+  const broker = new NetworkBroker({
+    lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    solverUrl: 'http://solver:8191',
+    transport: async () => ({ status: 403, headers: { 'cf-mitigated': 'challenge' }, body: Buffer.from('<title>Just a moment...</title>') }),
+    solverFetch: async (_url, init) => {
+      const request = JSON.parse(init.body);
+      return Response.json(request.cmd === 'sessions.destroy' ? { status: 'ok' } : {
+        status: 'ok', solution: { url: request.url, status: 200, headers: {}, cookies: [], userAgent: 'FixtureBrowser',
+          response: '<div class="col-content"><div class="row"><img src="/cover.webp"><h3><a href="/fixture.html" title="Fixture Story">Fixture Story</a></h3></div></div>' },
+      });
+    },
+  });
+  t.after(() => broker.close());
+  const novels = await runPlugin(entry.script, 'popularNovels', [1, {}], { fetch: (url, init) => broker.fetch(entry.source, url, init) });
+  assert.deepEqual(novels, [{ cover: 'https://novelfull.com/cover.webp', path: 'fixture.html', name: 'Fixture Story' }]);
+});
+
+test('AllNovel marks listing search detail and chapter HTML while retaining AJAX request semantics', async t => {
+  const { script } = await pinnedEntry(t, 'allnovel');
+  const requests = [];
+  const fetch = async (url, init) => {
+    requests.push({ url, init });
+    if (url.includes('ajax-chapter-option')) return { url, status: 200, headers: {}, body: '<a href="/fixture/chapter-1.html" title="Chapter 1">One</a>' };
+    if (url.includes('ajax=chapters')) return { url, status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ html: '<a href="/fixture/chapter-1.html" title="Chapter 1">One</a>', totalPage: 1 }) };
+    return { url, status: 200, headers: { 'content-type': 'text/html' }, body: '<div class="books"><img src="/cover.jpg" title="Fixture"></div><div id="rating" data-novel-id="123"></div><script>window.chapterPagination = {totalChapters: 1}</script><div id="chapter-content"><p>Chapter prose.</p></div>' };
+  };
+  await runPlugin(script, 'popularNovels', [2, { showLatestNovels: true }], { fetch });
+  await runPlugin(script, 'popularNovels', [1, { filters: { genres: { value: 'genre/Fantasy' } } }], { fetch });
+  await runPlugin(script, 'searchNovels', ['fixture', 1], { fetch });
+  const novel = await runPlugin(script, 'parseNovel', ['fixture.html'], { fetch });
+  assert.equal(novel.chapters[0].path, 'fixture/chapter-1.html');
+  assert.match(await runPlugin(script, 'parseChapter', ['fixture/chapter-1.html'], { fetch }), /Chapter prose/);
+  const chapters = await runPlugin(script, 'fetchAllChaptersViaJsonAjax', ['fixture.html'], { fetch });
+  assert.equal(chapters[0].path, 'fixture/chapter-1.html');
+  for (const request of requests.filter(r => !r.url.includes('ajax'))) assert.equal(request.init.headers.accept, 'text/html', request.url);
+  const post = requests.find(r => r.url.includes('ajax-chapter-option'));
+  assert.equal(post.init.method, 'POST');
+  assert.match(post.init.body, /novelId=123/);
+  assert.equal(post.init.headers['content-type'], 'application/x-www-form-urlencoded');
+  assert.equal(post.init.headers['x-requested-with'], 'XMLHttpRequest');
+  assert.equal(post.init.headers.accept, undefined);
+  const json = requests.find(r => r.url.includes('ajax=chapters'));
+  assert.equal(json.init.headers.accept, undefined);
+});
